@@ -14,7 +14,6 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
     
     teams = [[] for _ in range(num_teams)]
     
-    # 1. 여자 2명 우선 배치
     for team in teams:
         assigned_regions = set()
         for _ in range(2):
@@ -25,7 +24,6 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
                     females.pop(i)
                     break
                     
-    # 2. 남은 인원 배치
     remaining_players = females + males
     remaining_players.sort(key=lambda x: str(x['지역'])) 
     
@@ -42,13 +40,11 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
                 player = remaining_players.pop(0)
                 team.append(player)
                 
-    # 3. 타순 및 구장 배정 (청, 백, 홍, 황)
     regions = working_df['지역'].unique()
     region_batting_counts = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in regions}
     final_roster = []
     
     for team_idx, team in enumerate(teams):
-        # ★ 선택한 부문(개인/단체)에 따라 조 이름이 다르게 붙습니다.
         team_name = f"{match_type} {team_idx + 1}조"
         fields = ['청', '백', '홍', '황']
         field = fields[team_idx % 4]
@@ -64,12 +60,11 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
             
             final_roster.append({
                 '팀': team_name, '출발홀': start_hole, '타순': best_order,
-                '지역': player['지역'], '성명': player['성명'], '성별': player['성별']
+                '지역': player['지역'], '이름': player['이름'], '성별': player['성별']
             })
             
     final_df = pd.DataFrame(final_roster)
     
-    # ★ 정렬 로직 (구장 ➔ 홀 ➔ 조 ➔ 타순) 타순 섞임 방지 적용
     final_df['구장_순서'] = final_df['출발홀'].str[0].map({'청': 1, '백': 2, '홍': 3, '황': 4})
     final_df['홀_번호'] = final_df['출발홀'].str.extract(r'(\d+)')[0].astype(int)
     final_df['조_번호'] = final_df['팀'].str.extract(r'(\d+)')[0].astype(int)
@@ -79,7 +74,6 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
     
     return final_df
 
-# --- 웹사이트 화면 구성 ---
 st.set_page_config(page_title="그라운드골프 대진표 시스템", layout="wide")
 
 st.title("⛳ 전국그라운드골프대회 대진표 자동 편성 시스템")
@@ -87,13 +81,11 @@ st.markdown("엑셀 명단을 업로드하면 조편성 규칙을 적용하여 �
 
 with st.sidebar:
     st.header("⚙️ 대회 규정 설정")
-    # ★ 개인전 / 단체전 선택 기능 추가
     match_type = st.radio("🏆 편성 부문 선택", ("개인전", "단체전"), index=0)
     holes = st.radio("출발홀 수 선택", (6, 7, 8), index=2)
     players = st.radio("1조당 최대 인원", (6, 7, 8), index=0)
-    st.info("💡 엑셀 파일은 1행에 '지역', '성명', '성별' 열이 있어야 합니다.")
+    st.info("💡 엑셀 파일은 1행에 '지역', '이름', '성별' 열이 있어야 합니다.")
 
-# 안내 문구도 선택된 부문에 맞춰 바뀝니다.
 uploaded_file = st.file_uploader(f"[{match_type}] 참가선수명단 엑셀 파일(.xlsx)을 올려주세요.", type=["xlsx"])
 
 if uploaded_file is not None:
@@ -101,21 +93,19 @@ if uploaded_file is not None:
         df = pd.read_excel(uploaded_file)
         df.columns = df.columns.str.strip()
         
-        if not {'지역', '성명', '성별'}.issubset(df.columns):
-            st.error("❌ 엑셀 파일에 '지역', '성명', '성별' 열이 모두 포함되어 있는지 확인해 주세요.")
+        if not {'지역', '이름', '성별'}.issubset(df.columns):
+            st.error("❌ 엑셀 파일에 '지역', '이름', '성별' 열이 모두 포함되어 있는지 확인해 주세요.")
         else:
             st.success(f"✅ 총 {len(df)}명의 선수 명단을 성공적으로 불러왔습니다!")
             
             if st.button(f"🚀 {match_type} 자동 조 편성 실행", type="primary"):
                 with st.spinner("최적의 배치를 계산 중입니다..."):
                     
-                    # 알고리즘 실행
                     final_df = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players, match_type=match_type)
                     
-                    st.subheader(f"🎉 {match_type} 편성 완료 (조별 인원 섞임 방지 적용됨)")
+                    st.subheader(f"🎉 {match_type} 편성 완료")
                     st.dataframe(final_df, use_container_width=True)
                     
-                    # 파일명도 개인전/단체전으로 자동 구분 저장
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                         final_df.to_excel(writer, index=False, sheet_name=f'{match_type} 조편성결과')
