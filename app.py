@@ -3,125 +3,109 @@ import pandas as pd
 import numpy as np
 import io
 
-def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6):
-    working_df = df.copy()
-    total_players = len(working_df)
-    team_size = players_per_team
-    num_teams = (total_players + team_size - 1) // team_size
-    
-    females = working_df[working_df['성별'] == '여'].to_dict('records')
-    males = working_df[working_df['성별'] == '남'].to_dict('records')
-    
-    teams = [[] for _ in range(num_teams)]
-    
-    # 1. 여자 2명 우선 배치
-    for team in teams:
-        assigned_regions = set()
-        for _ in range(2):
-            for i, p in enumerate(females):
-                if p['지역'] not in assigned_regions:
-                    team.append(p)
-                    assigned_regions.add(p['지역'])
-                    females.pop(i)
-                    break
-                    
-    # 2. 남은 인원 배치
-    remaining_players = females + males
-    remaining_players.sort(key=lambda x: str(x['지역'])) 
-    
-    for team in teams:
-        assigned_regions = {p['지역'] for p in team}
-        while len(team) < team_size and remaining_players:
-            for i, p in enumerate(remaining_players):
-                if p['지역'] not in assigned_regions:
-                    team.append(p)
-                    assigned_regions.add(p['지역'])
-                    remaining_players.pop(i)
-                    break
-            else:
-                player = remaining_players.pop(0)
-                team.append(player)
-                
-    # 3. 타순 및 구장 배정 (청, 백, 홍, 황)
-    regions = working_df['지역'].unique()
-    region_batting_counts = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in regions}
-    final_roster = []
-    
-    for team_idx, team in enumerate(teams):
-        team_name = f"{team_idx + 1}조"
-        fields = ['청', '백', '홍', '황']
-        field = fields[team_idx % 4]
-        hole = (team_idx // 4) % holes_per_field + 1
-        start_hole = f"{field}구장 {hole}홀"
-        
-        available_orders = list(range(1, len(team) + 1))
-        for player in team:
-            best_order = min(available_orders, key=lambda o: region_batting_counts[player['지역']].get(o, 0))
-            available_orders.remove(best_order)
-            if best_order in region_batting_counts[player['지역']]:
-                region_batting_counts[player['지역']][best_order] += 1
-            
-            final_roster.append({
-                '팀': team_name, '출발홀': start_hole, '타순': best_order,
-                '지역': player['지역'], '성명': player['성명'], '성별': player['성별']
-            })
-            
-    final_df = pd.DataFrame(final_roster)
-    
-    # ★ 핵심 수정 로직: 타순 섞임 방지를 위해 '조 번호' 정렬 기준 추가 ★
-    final_df['구장_순서'] = final_df['출발홀'].str[0].map({'청': 1, '백': 2, '홍': 3, '황': 4})
-    final_df['홀_번호'] = final_df['출발홀'].str.extract(r'(\d+)')[0].astype(int)
-    final_df['조_번호'] = final_df['팀'].str.extract(r'(\d+)')[0].astype(int)
-    
-    # [구장 ➔ 홀 ➔ 조 ➔ 타순] 순으로 정렬하여 팀이 온전히 유지되도록 강제
-    final_df = final_df.sort_values(by=['구장_순서', '홀_번호', '조_번호', '타순']).reset_index(drop=True)
-    
-    final_df = final_df.drop(columns=['구장_순서', '홀_번호', '조_번호'])
-    
-    return final_df
+st.set_page_config(page_title="그라운드골프 단체전 채점 시스템", layout="wide")
 
-# --- 웹사이트 화면 구성 ---
-st.set_page_config(page_title="그라운드골프 조편성 프로그램", layout="wide")
+st.title("🤝 단체전 전용 자동 채점 시스템")
+st.markdown("단일 엑셀 파일을 업로드하면 **[단체전 채점표]** 시트의 데이터를 바탕으로 팀별 합산 및 순위를 자동 계산합니다.")
 
-st.title("⛳ 전국그라운드골프대회 자동 조편성 시스템")
-st.markdown("엑셀 명단을 업로드하면 동일 지역 금지, 여성 필수 포함 등의 규칙을 적용하여 자동으로 조를 편성합니다. **(결과는 청·백·홍·황 구장 순서로 정렬되어 출력됩니다.)**")
+st.info("""
+**💡 단체전 순위 결정 규정**
+1. **팀 총타수**가 가장 적은 팀
+2. 동타일 경우, **팀 2타수** 합계가 많은 팀
+3. 2타수도 같을 경우, **팀 홀인원** 합계가 많은 팀
+""")
 
-with st.sidebar:
-    st.header("⚙️ 대회 규정 설정")
-    holes = st.radio("출발홀 수 선택", (6, 7, 8), index=2)
-    players = st.radio("1조당 최대 인원", (6, 7, 8), index=0)
-    st.info("💡 엑셀 파일은 1행에 '지역', '성명', '성별' 열이 있어야 합니다.")
-
-uploaded_file = st.file_uploader("참가선수명단 엑셀 파일(.xlsx)을 올려주세요.", type=["xlsx"])
+uploaded_file = st.file_uploader("단체전 채점표가 포함된 엑셀 파일을 업로드해주세요 (.xlsx)", type=["xlsx"])
 
 if uploaded_file is not None:
+    # 엑셀 컬럼 설정 (왼쪽 1~14열 선수 개별 데이터)
+    col_names = [
+        '일시', '조', '타순', '소속', '성명', 
+        '1일차_총타수', '1일차_2타수', '1일차_홀인원', 
+        '2일차_총타수', '2일차_2타수', '2일차_홀인원', 
+        '최종_총타수', '최종_2타수', '최종_홀인원'
+    ]
+
     try:
-        df = pd.read_excel(uploaded_file)
-        df.columns = df.columns.str.strip()
-        
-        if not {'지역', '성명', '성별'}.issubset(df.columns):
-            st.error("❌ 엑셀 파일에 '지역', '성명', '성별' 열이 모두 포함되어 있는지 확인해 주세요.")
-        else:
-            st.success(f"✅ 총 {len(df)}명의 선수 명단을 성공적으로 불러왔습니다!")
+        with st.spinner("단체전 순위를 집계 중입니다..."):
+            # 1. 단체전 채점표 데이터 읽기
+            df_raw = pd.read_excel(uploaded_file, sheet_name='단체전 채점표', skiprows=2, usecols=range(14), names=col_names)
             
-            if st.button("🚀 자동 조 편성 실행", type="primary"):
-                with st.spinner("최적의 배치를 계산 중입니다..."):
-                    
-                    final_df = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players)
-                    
-                    st.subheader("🎉 편성 완료 (조별 인원 섞임 방지 적용됨)")
-                    st.dataframe(final_df, use_container_width=True)
-                    
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                        final_df.to_excel(writer, index=False, sheet_name='조편성결과')
-                    processed_data = output.getvalue()
-                    
-                    st.download_button(
-                        label="📥 최종 조편성 엑셀 파일 다운로드",
-                        data=processed_data,
-                        file_name="제18회_대한체육회장기_배치결과.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+            # 소속과 성명이 있는 데이터만 유효한 것으로 판단
+            df_raw = df_raw.dropna(subset=['성명', '소속'])
+            
+            # 숫자 데이터 변환 및 결측치 처리
+            score_cols = ['최종_총타수', '최종_2타수', '최종_홀인원']
+            for col in score_cols:
+                df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0).astype(int)
+                
+            # 합계 데이터 보정 (최종 칸이 비어있을 경우 1, 2일차 합산)
+            df_raw['최종_총타수'] = np.where(df_raw['최종_총타수'] == 0, 
+                                        pd.to_numeric(df_raw['1일차_총타수'], errors='coerce').fillna(0) + 
+                                        pd.to_numeric(df_raw['2일차_총타수'], errors='coerce').fillna(0), 
+                                        df_raw['최종_총타수'])
+            df_raw['최종_2타수'] = np.where(df_raw['최종_총타수'] > 0, 
+                                        pd.to_numeric(df_raw['1일차_2타수'], errors='coerce').fillna(0) + 
+                                        pd.to_numeric(df_raw['2일차_2타수'], errors='coerce').fillna(0), 
+                                        df_raw['최종_2타수'])
+            df_raw['최종_홀인원'] = np.where(df_raw['최종_총타수'] > 0, 
+                                        pd.to_numeric(df_raw['1일차_홀인원'], errors='coerce').fillna(0) + 
+                                        pd.to_numeric(df_raw['2일차_홀인원'], errors='coerce').fillna(0), 
+                                        df_raw['최종_홀인원'])
+
+            # 기권 등을 제외하고 실제 점수가 있는 데이터만 사용
+            df_raw = df_raw[df_raw['최종_총타수'] > 0].copy()
+
+            # 2. 팀별 합산 (소속 기준 그룹화)
+            df_team = df_raw.groupby('소속', as_index=False)[['최종_총타수', '최종_2타수', '최종_홀인원']].sum()
+
+            # 3. 순위 산정 (총타수 소 ➔ 2타수 대 ➔ 홀인원 대)
+            df_team = df_team.sort_values(by=['최종_총타수', '최종_2타수', '최종_홀인원'], ascending=[True, False, False]).reset_index(drop=True)
+            
+            # 동점자 처리 포함 순위 부여
+            df_team['순위'] = df_team[['최종_총타수', '최종_2타수', '최종_홀인원']].apply(
+                lambda x: (-x['최종_총타수'], x['최종_2타수'], x['최종_홀인원']), axis=1
+            ).rank(method='min', ascending=False).astype(int)
+
+            # 결과 데이터 정리
+            team_ranking = df_team[['순위', '소속', '최종_총타수', '최종_2타수', '최종_홀인원']].copy()
+            team_ranking.columns = ['순위', '소속', '총타수(합계)', '2타수(합계)', '홀인원(합계)']
+
+            # 4. 단체전 시상 명단 (1~5위 및 장려상 5팀)
+            award_titles = ['1위', '2위', '3위', '4위', '5위'] + ['장려상'] * 5
+            awards_data = []
+            for i, title in enumerate(award_titles):
+                if i < len(team_ranking):
+                    t = team_ranking.iloc[i]
+                    awards_data.append([title, t['소속'], t['총타수(합계)'], t['2타수(합계)'], t['홀인원(합계)']])
+                else:
+                    awards_data.append([title, '', '', '', ''])
+            team_awards = pd.DataFrame(awards_data, columns=['구분', '소속(팀명)', '총타수', '2타수', '홀인원'])
+
+            # 화면 출력
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.subheader("🤝 단체전 시상팀 명단")
+                st.dataframe(team_awards, use_container_width=True, hide_index=True)
+            with col2:
+                st.subheader("📊 단체전 전체 순위표")
+                st.dataframe(team_ranking, use_container_width=True, hide_index=True)
+
+            # 5. 엑셀 다운로드 생성
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                team_ranking.to_excel(writer, index=False, sheet_name='단체전 순위표')
+                team_awards.to_excel(writer, index=False, sheet_name='단체전 시상(출력물)')
+                
+            processed_data = output.getvalue()
+            
+            st.success("🎉 단체전 채점이 완료되었습니다!")
+            st.download_button(
+                label="📥 단체전 결과 엑셀 다운로드",
+                data=processed_data,
+                file_name="제18회_대한체육회장배_단체전_결과.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
     except Exception as e:
-        st.error(f"오류가 발생했습니다: {e}")
+        st.error(f"오류가 발생했습니다. 시트 이름이 '단체전 채점표'인지 확인해주세요: {e}")
