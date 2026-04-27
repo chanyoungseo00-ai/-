@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import io
 
-# --- [1] 기존 조 편성 알고리즘 (동일) ---
 def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6):
     working_df = df.copy()
     total_players = len(working_df)
@@ -67,27 +66,38 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6):
                 '지역': player['지역'], '성명': player['성명'], '성별': player['성별']
             })
             
-    return pd.DataFrame(final_roster)
+    final_df = pd.DataFrame(final_roster)
+    
+    # ★ 추가된 로직: 청, 백, 홍, 황 순서대로 정렬하기 ★
+    # 1) 구장 순서를 1, 2, 3, 4로 매핑
+    final_df['구장_순서'] = final_df['출발홀'].str[0].map({'청': 1, '백': 2, '홍': 3, '황': 4})
+    # 2) 홀 번호를 추출해서 숫자로 변환
+    final_df['홀_번호'] = final_df['출발홀'].str.extract(r'(\d+)홀').astype(int)
+    
+    # 3) 정렬: 구장 순서 -> 홀 번호 -> 타순 순으로 오름차순 정렬
+    final_df = final_df.sort_values(by=['구장_순서', '홀_번호', '타순']).reset_index(drop=True)
+    
+    # 4) 사용이 끝난 임시 열(구장_순서, 홀_번호) 삭제
+    final_df = final_df.drop(columns=['구장_순서', '홀_번호'])
+    
+    return final_df
 
-# --- [2] 웹사이트 화면 구성 (Streamlit) ---
+# --- 웹사이트 화면 구성 ---
 st.set_page_config(page_title="그라운드골프 조편성 프로그램", layout="wide")
 
 st.title("⛳ 전국그라운드골프대회 자동 조편성 시스템")
-st.markdown("엑셀 명단을 업로드하면 동일 지역 금지, 여성 필수 포함, 타순 순환 등의 규칙을 적용하여 자동으로 조를 편성합니다.")
+st.markdown("엑셀 명단을 업로드하면 동일 지역 금지, 여성 필수 포함 등의 규칙을 적용하여 자동으로 조를 편성합니다. **(결과는 청·백·홍·황 구장 순서로 정렬되어 출력됩니다.)**")
 
-# 사이드바 (설정 메뉴)
 with st.sidebar:
     st.header("⚙️ 대회 규정 설정")
     holes = st.radio("출발홀 수 선택", (6, 7, 8), index=2)
     players = st.radio("1조당 최대 인원", (6, 7, 8), index=0)
     st.info("💡 엑셀 파일은 1행에 '지역', '성명', '성별' 열이 있어야 합니다.")
 
-# 메인 화면 (파일 업로드)
 uploaded_file = st.file_uploader("참가선수명단 엑셀 파일(.xlsx)을 올려주세요.", type=["xlsx"])
 
 if uploaded_file is not None:
     try:
-        # 엑셀 읽기
         df = pd.read_excel(uploaded_file)
         df.columns = df.columns.str.strip()
         
@@ -98,22 +108,21 @@ if uploaded_file is not None:
             
             if st.button("🚀 자동 조 편성 실행", type="primary"):
                 with st.spinner("최적의 배치를 계산 중입니다..."):
-                    # 알고리즘 실행
+                    
                     final_df = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players)
                     
-                    st.subheader("🎉 편성 완료 (결과 미리보기)")
+                    st.subheader("🎉 편성 완료 (청 ➔ 백 ➔ 홍 ➔ 황 순서 정렬)")
                     st.dataframe(final_df, use_container_width=True)
                     
-                    # 엑셀 다운로드 버튼 생성
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                         final_df.to_excel(writer, index=False, sheet_name='조편성결과')
                     processed_data = output.getvalue()
                     
                     st.download_button(
-                        label="📥 최종 엑셀 파일 다운로드",
+                        label="📥 최종 조편성 엑셀 파일 다운로드",
                         data=processed_data,
-                        file_name="제18회_대한체육회장기_배치결과.xlsx",
+                        file_name="제18회_대한체육회장기_배치결과_구장별정렬.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
     except Exception as e:
