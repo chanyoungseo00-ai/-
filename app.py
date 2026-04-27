@@ -68,17 +68,15 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6):
             
     final_df = pd.DataFrame(final_roster)
     
-    # ★ 추가된 로직: 청, 백, 홍, 황 순서대로 정렬하기 ★
-    # 1) 구장 순서를 1, 2, 3, 4로 매핑
+    # ★ 핵심 수정 로직: 타순 섞임 방지를 위해 '조 번호' 정렬 기준 추가 ★
     final_df['구장_순서'] = final_df['출발홀'].str[0].map({'청': 1, '백': 2, '홍': 3, '황': 4})
-    # 2) 홀 번호를 추출해서 숫자로 변환
-    final_df['홀_번호'] = final_df['출발홀'].str.extract(r'(\d+)홀').astype(int)
+    final_df['홀_번호'] = final_df['출발홀'].str.extract(r'(\d+)')[0].astype(int)
+    final_df['조_번호'] = final_df['팀'].str.extract(r'(\d+)')[0].astype(int)
     
-    # 3) 정렬: 구장 순서 -> 홀 번호 -> 타순 순으로 오름차순 정렬
-    final_df = final_df.sort_values(by=['구장_순서', '홀_번호', '타순']).reset_index(drop=True)
+    # [구장 ➔ 홀 ➔ 조 ➔ 타순] 순으로 정렬하여 팀이 온전히 유지되도록 강제
+    final_df = final_df.sort_values(by=['구장_순서', '홀_번호', '조_번호', '타순']).reset_index(drop=True)
     
-    # 4) 사용이 끝난 임시 열(구장_순서, 홀_번호) 삭제
-    final_df = final_df.drop(columns=['구장_순서', '홀_번호'])
+    final_df = final_df.drop(columns=['구장_순서', '홀_번호', '조_번호'])
     
     return final_df
 
@@ -111,7 +109,7 @@ if uploaded_file is not None:
                     
                     final_df = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players)
                     
-                    st.subheader("🎉 편성 완료 (청 ➔ 백 ➔ 홍 ➔ 황 순서 정렬)")
+                    st.subheader("🎉 편성 완료 (조별 인원 섞임 방지 적용됨)")
                     st.dataframe(final_df, use_container_width=True)
                     
                     output = io.BytesIO()
@@ -122,7 +120,7 @@ if uploaded_file is not None:
                     st.download_button(
                         label="📥 최종 조편성 엑셀 파일 다운로드",
                         data=processed_data,
-                        file_name="제18회_대한체육회장기_배치결과_구장별정렬.xlsx",
+                        file_name="제18회_대한체육회장기_배치결과.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
     except Exception as e:
