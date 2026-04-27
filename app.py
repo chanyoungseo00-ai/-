@@ -44,7 +44,7 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
                     player = remaining_players.pop(0)
                     team.append(player)
                 
-    # 3. ★ 타순 완벽 분산 및 구장 배정 ★
+    # 3. 타순 완벽 분산 및 구장 배정
     regions = working_df['지역'].unique()
     region_batting_counts = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in regions}
     final_roster = []
@@ -56,7 +56,6 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
         hole = (team_idx // 4) % holes_per_field + 1
         start_hole = f"{field}구장 {hole}홀"
         
-        # [핵심 로직] 아직 배정받지 못한 타순(0회)이 가장 많은 지역의 선수부터 타순 우선 선택권 부여
         team.sort(key=lambda p: sum(1 for v in region_batting_counts.get(p['지역'], {i:0 for i in range(1, players_per_team+1)}).values() if v == 0), reverse=True)
         
         available_orders = list(range(1, len(team) + 1))
@@ -65,11 +64,9 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
             if player['지역'] not in region_batting_counts:
                 region_batting_counts[player['지역']] = {i: 0 for i in range(1, players_per_team + 1)}
                 
-            # 해당 선수의 지역이 가장 적게 배정받은 타순 후보들을 모두 추출
             min_usage = min(region_batting_counts[player['지역']][o] for o in available_orders)
             candidates = [o for o in available_orders if region_batting_counts[player['지역']][o] == min_usage]
             
-            # 후보 중 무작위로 하나를 선택하여 특정 번호로 쏠리는 패턴 방지
             best_order = random.choice(candidates)
             
             available_orders.remove(best_order)
@@ -116,4 +113,80 @@ if uploaded_file is not None:
         df.columns = df.columns.str.strip()
         
         if not {'지역', '이름', '성별'}.issubset(df.columns):
-            st.error("❌
+            st.error("❌ 엑셀 파일에 '지역', '이름', '성별' 열이 모두 포함되어 있는지 확인해 주세요.")
+        else:
+            df = df.dropna(subset=['지역', '이름', '성별']).copy()
+            st.success(f"✅ 총 {len(df)}명의 선수 명단을 성공적으로 불러왔습니다!")
+            
+            if st.button(f"🚀 {match_type} 자동 조 편성 실행", type="primary"):
+                with st.spinner("최적의 배치를 계산 중입니다..."):
+                    
+                    final_df = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players, match_type=match_type)
+                    
+                    st.subheader(f"🎉 {match_type} 대진표 편성 완료")
+                    st.dataframe(final_df, use_container_width=True)
+                    
+                    st.markdown("---")
+                    st.subheader("📊 타순 분산 및 조별 배치 검증 리포트")
+                    
+                    temp_df = final_df.copy()
+                    
+                    validation_order = pd.crosstab(temp_df['지역'], temp_df['타순']) 
+                    validation_team = pd.crosstab(temp_df['지역'], temp_df['팀'])   
+                    
+                    st.markdown("**1. 지역별 모든 타순(1번~마지막) 경험 현황**")
+                    st.caption(f"각 지역 선수들이 1번부터 {players}번 타순까지 한 번도 빠짐없이 고르게 들어갔는지 확인합니다.")
+                    
+                    total_regions = len(validation_order)
+                    perfect_regions = 0
+                    short_players_regions = []
+                    
+                    for region in validation_order.index:
+                        region_total = validation_order.loc[region].sum()
+                        zeros_in_order = (validation_order.loc[region] == 0).sum()
+                        
+                        if region_total >= players:
+                            if zeros_in_order == 0:
+                                perfect_regions += 1
+                        else:
+                            short_players_regions.append(f"{region}(총 {region_total}명)")
+                            
+                    if perfect_regions == (total_regions - len(short_players_regions)):
+                        st.success("✅ 완벽합니다! 인원수가 충분한 모든 지역이 1번부터 마지막 타순까지 빠짐없이 1회 이상 배치되었습니다.")
+                    else:
+                        st.warning("⚠️ 쏠림 방지 로직을 가동했으나, 인원수 등 불가피한 제약으로 인해 일부 빈 타순이 발생했습니다.")
+                        
+                    if short_players_regions:
+                        st.info(f"💡 안내: 참가 인원이 너무 적어 모든 타순 배정이 애초에 불가능한 지역: {', '.join(short_players_regions)}")
+                        
+                    st.dataframe(validation_order, use_container_width=True)
+                    
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    st.markdown("**2. 한 조에 동일 지역 중복 배치 여부 (1 초과 시 경고)**")
+                    
+                    if not validation_team.empty:
+                        max_overlap = validation_team.max().max()
+                        if max_overlap > 1:
+                            st.error(f"⚠️ 불가피한 인원 배정 문제로 동일 조에 같은 지역 선수가 중복 배치된 곳이 있습니다. (최대 {max_overlap}명)")
+                        else:
+                            st.success("✅ 합격! 모든 조에 동일 지역 선수가 겹치지 않고 1명씩 안전하게 배치되었습니다.")
+                            
+                    st.dataframe(validation_team, use_container_width=True)
+
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        final_df.to_excel(writer, index=False, sheet_name=f'{match_type}_대진표')
+                        validation_order.to_excel(writer, sheet_name='지역별_타순검증')
+                        validation_team.to_excel(writer, sheet_name='지역별_조검증')
+                        
+                    processed_data = output.getvalue()
+                    
+                    st.markdown("---")
+                    st.download_button(
+                        label=f"📥 {match_type} 대진표 및 검증표 엑셀 다운로드",
+                        data=processed_data,
+                        file_name=f"제18회_대한체육회장배_{match_type}_대진표_최종결과.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+    except Exception as e:
+        st.error(f"오류가 발생했습니다. 원본 엑셀 파일을 다시 확인해 주세요: {e}")
