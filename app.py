@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
+import random
 import itertools
 
 def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
@@ -43,9 +44,40 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
                 if remaining_players:
                     player = remaining_players.pop(0)
                     team.append(player)
+                    
+    # 2-5. [신규 로직] 강제 배치로 인한 동일 지역 중복 발생 시, 다른 조와 맞교환(Swap)하여 완벽 차단
+    max_swaps = 100
+    swaps = 0
+    while swaps < max_swaps:
+        violation_found = False
+        for team in teams:
+            regions_in_team = [p['지역'] for p in team]
+            for p in team:
+                if regions_in_team.count(p['지역']) > 1:
+                    violation_found = True
+                    swap_done = False
+                    for other_team in teams:
+                        if other_team is team: continue
+                        if p['지역'] not in [x['지역'] for x in other_team]:
+                            for other_p in other_team:
+                                team_regions_without_p = [x['지역'] for x in team if x is not p]
+                                if other_p['지역'] not in team_regions_without_p:
+                                    team.remove(p)
+                                    other_team.remove(other_p)
+                                    team.append(other_p)
+                                    other_team.append(p)
+                                    swap_done = True
+                                    swaps += 1
+                                    break
+                        if swap_done: break
+                    if swap_done: break
+            if violation_found: break
+        if not violation_found:
+            break
                 
-    # 3. ★ 타순 완벽 분산 (순열 탐색 알고리즘) 및 구장 배정 ★
-    region_batting_counts = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
+    # 3. ★ 타순 완벽 분산 알고리즘 (가중치 채점 방식) ★
+    regions = working_df['지역'].unique()
+    region_batting_counts = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in regions}
     final_roster = []
     
     for team_idx, team in enumerate(teams):
@@ -59,23 +91,32 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
         best_perm = None
         best_score = float('inf')
         
-        # 현재 조 선수들의 지역 목록
+        all_perms = list(itertools.permutations(available_orders))
+        random.shuffle(all_perms)
+        
         team_regions = [p['지역'] for p in team]
         
-        # 해당 조 안에서 가능한 모든 타순 조합(경우의 수)을 시뮬레이션
-        for perm in itertools.permutations(available_orders):
+        # 가능한 모든 타순 조합(수천 가지)을 시뮬레이션하여 최적의 분산 도출
+        for perm in all_perms:
             score = 0
             for i, r in enumerate(team_regions):
-                # 지역별 특정 타순 배정 횟수의 제곱을 더하여, 쏠림이 발생할수록 페널티를 무겁게 부여
-                score += region_batting_counts[r].get(perm[i], 0) ** 2
+                count = region_batting_counts[r].get(perm[i], 0)
+                if count == 0:
+                    # 해당 타순에 처음 배치되는 경우: 압도적인 혜택(마이너스 점수) 부여 -> 우선 배치
+                    score -= 10000 
+                else:
+                    # 이미 배치된 적이 있는 경우: 남은 인원 균등 분산을 위해 누적 횟수만큼 페널티 부여
+                    score += count 
             
             if score < best_score:
                 best_score = score
                 best_perm = perm
-                if score == 0: # 완벽하게 안 쓴 타순들로만 배정 가능하면 즉시 확정
-                    break
-                    
-        # 최적의 타순 조합을 실제 선수들에게 적용
+                
+            # 가장 완벽한 조합(모두가 새로운 타순)을 찾으면 조기 종료
+            if score == -10000 * len(team):
+                break
+                
+        # 최적의 타순을 확정하고 카운트 증가
         for i, player in enumerate(team):
             best_order = best_perm[i]
             if player['지역'] not in region_batting_counts:
@@ -127,7 +168,7 @@ if uploaded_file is not None:
             st.success(f"✅ 총 {len(df)}명의 선수 명단을 성공적으로 불러왔습니다!")
             
             if st.button(f"🚀 {match_type} 자동 조 편성 실행", type="primary"):
-                with st.spinner("최적의 배치를 계산 중입니다... (수천 가지 타순 조합 분석 중)"):
+                with st.spinner("최적의 배치를 계산 중입니다... (교차 검증 및 무결성 확인 중)"):
                     
                     final_df = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players, match_type=match_type)
                     
@@ -135,7 +176,7 @@ if uploaded_file is not None:
                     st.dataframe(final_df, use_container_width=True)
                     
                     # ---------------------------------------------------------
-                    # ★ 자동 오류 검증 리포트 (오류가 있을 때만 표 출력) ★
+                    # ★ 깔끔하게 개편된 자동 오류 검증 리포트 ★
                     # ---------------------------------------------------------
                     st.markdown("---")
                     st.subheader("📊 자동 배치 검증 리포트")
@@ -150,27 +191,38 @@ if uploaded_file is not None:
                     
                     for region in validation_order.index:
                         region_total = validation_order.loc[region].sum()
+                        zeros = validation_order.columns[validation_order.loc[region] == 0].tolist()
+                        
                         if region_total >= players:
-                            # 인원이 충분한데 배정 횟수가 0인 타순이 있는지 검사
-                            zeros = validation_order.columns[validation_order.loc[region] == 0].tolist()
-                            if zeros:
+                            if zeros: # 인원이 충분한데 타순 배정을 0회 받은 곳이 있다면 오류
                                 order_errors.append({
                                     '지역': region, 
                                     '총 인원수': f"{region_total}명", 
                                     '누락된 타순(배정 0회)': ", ".join(map(lambda x: f"{x}번", zeros))
                                 })
                         else:
-                            short_players_regions.append(f"{region}({region_total}명)")
-                            
-                    st.markdown("**1. 지역별 타순 누락 검증 (쏠림 현상 확인)**")
+                            # 인원이 적은 경우, 인원수만큼 타순을 다양하게 받았는지 검사
+                            used_orders = (validation_order.loc[region] > 0).sum()
+                            if used_orders < region_total:
+                                duplicates = validation_order.columns[validation_order.loc[region] > 1].tolist()
+                                order_errors.append({
+                                    '지역': region, 
+                                    '총 인원수': f"{region_total}명", 
+                                    '중복 배정된 타순': ", ".join(map(lambda x: f"{x}번", duplicates)),
+                                    '사유': f"인원이 적음에도 불구하고 동일 타순 중복 배정됨"
+                                })
+                            else:
+                                short_players_regions.append(f"{region}({region_total}명)")
+                                
+                    st.markdown("**1. 지역별 모든 타순(1번~마지막) 최소 1회 배정 검증**")
                     if not order_errors:
-                        st.success("✅ 오류 없음 (모든 지역이 1번부터 마지막 타순까지 완벽하게 분산 배치되었습니다.)")
+                        st.success("✅ 오류 없음 (모든 지역이 규정에 맞게 모든 타순에 우선적으로 완벽히 배치되었습니다.)")
                     else:
-                        st.error("⚠️ 타순 배정 오류 발생 (일부 타순 쏠림 내역이 존재합니다.)")
+                        st.error("⚠️ 타순 배정 오류 발생 (아래 지역의 타순 쏠림 내역을 확인하세요.)")
                         st.dataframe(pd.DataFrame(order_errors), use_container_width=True, hide_index=True)
                         
                     if short_players_regions:
-                        st.caption(f"💡 (참고) 전체 참가 인원 자체가 너무 적어 구조적으로 모든 타순 경험이 불가능한 지역: {', '.join(short_players_regions)}")
+                        st.caption(f"💡 (정상) 지역 총 인원이 1조 정원({players}명)보다 적어 모든 타순 배정이 불가능한 지역: {', '.join(short_players_regions)}")
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     
@@ -186,11 +238,11 @@ if uploaded_file is not None:
                                     '배치된 인원수': f"{count}명"
                                 })
                                 
-                    st.markdown("**2. 한 조에 동일 지역 중복 배치 검증**")
+                    st.markdown("**2. 한 조에 동일 지역 선수 중복 배치 검증**")
                     if not team_errors:
                         st.success("✅ 오류 없음 (모든 조에 동일 지역 선수가 겹치지 않고 1명씩 안전하게 배치되었습니다.)")
                     else:
-                        st.error("⚠️ 동일 조 중복 배치 오류 (남은 인원 배정상 불가피한 중복 내역입니다.)")
+                        st.error("⚠️ 동일 조 중복 배치 오류 (남은 인원 구조상 불가피하게 겹친 내역입니다.)")
                         st.dataframe(pd.DataFrame(team_errors), use_container_width=True, hide_index=True)
 
                     # ---------------------------------------------------------
