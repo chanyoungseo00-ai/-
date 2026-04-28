@@ -167,8 +167,128 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
             })
             
     final_df = pd.DataFrame(final_roster)
+    
+    # 정렬도 안전하게 줄바꿈
     final_df = final_df.sort_values(
         by=['_round_val', '_field_val', '_hole_val', '타순']
     ).reset_index(drop=True)
     
-    final_df = final_df.drop(columns
+    # 문제의 drop 구문도 안전하게 분리
+    columns_to_drop = ['_round_val', '_field_val', '_hole_val']
+    final_df = final_df.drop(columns=columns_to_drop)
+    
+    return final_df, num_teams
+
+# --- 웹사이트 화면 구성 ---
+st.title("⛳ 전국그라운드골프대회 대진표 자동 편성 시스템")
+
+with st.sidebar:
+    st.header("⚙️ 대회 규정 설정")
+    match_type = st.radio("🏆 편성 부문 선택", ("개인전", "단체전"), index=0)
+    holes = st.radio("출발홀 수 선택", (6, 7, 8), index=2)
+    players = st.radio("1조당 최대 인원", (6, 7, 8), index=0)
+    st.info("💡 엑셀 파일은 1행에 '지역', '이름', '성별' 열이 있어야 합니다.")
+
+uploaded_file = st.file_uploader(f"[{match_type}] 참가선수명단 엑셀 파일(.xlsx)을 올려주세요.", type=["xlsx"])
+
+if uploaded_file is not None:
+    try:
+        df = pd.read_excel(uploaded_file)
+        df.columns = df.columns.str.strip()
+        
+        if not {'지역', '이름', '성별'}.issubset(df.columns):
+            st.error("❌ 엑셀 파일에 '지역', '이름', '성별' 열이 모두 포함되어 있는지 확인해 주세요.")
+        else:
+            df = df.dropna(subset=['지역', '이름', '성별']).copy()
+            st.success(f"✅ 총 {len(df)}명의 선수 명단을 성공적으로 불러왔습니다!")
+            
+            if st.button(f"🚀 {match_type} 자동 조 편성 실행", type="primary"):
+                with st.spinner("구장별 최적의 배치를 계산 중입니다..."):
+                    
+                    final_df, total_teams = assign_teams_and_orders(
+                        df, holes_per_field=holes, players_per_team=players, match_type=match_type
+                    )
+                    
+                    st.subheader(f"🎉 {match_type} 대진표 편성 완료 (총 {total_teams}개 조)")
+                    st.dataframe(final_df, use_container_width=True)
+                    
+                    # --- 검증 리포트 영역 ---
+                    st.markdown("---")
+                    st.subheader("📊 무결성 검증 리포트")
+                    
+                    # [1] 지역 중복 검증
+                    validation_team = pd.crosstab(final_df['지역'], final_df['팀'])   
+                    team_errors = []
+                    unavoidable_errors = False
+                    
+                    for region_idx in validation_team.index:
+                        region_total_players = df[df['지역'] == region_idx].shape[0]
+                        is_unavoidable = region_total_players > total_teams 
+                        
+                        for team_col in validation_team.columns:
+                            count = validation_team.loc[region_idx, team_col]
+                            if count > 1:
+                                team_errors.append({
+                                    '구분': '불가피한 중복' if is_unavoidable else '배치 오류',
+                                    '조 이름': team_col, 
+                                    '중복된 지역': region_idx, 
+                                    '배치 인원': f"{count}명"
+                                })
+                                if is_unavoidable: 
+                                    unavoidable_errors = True
+                                
+                    st.markdown("**■ 한 조에 동일 지역 선수 중복 배치 여부**")
+                    if not team_errors:
+                        st.success("✅ 오류 없음 (모든 조에 동일 지역 선수가 겹치지 않고 분리 배치되었습니다.)")
+                    else:
+                        if unavoidable_errors:
+                            st.warning(f"⚠️ 일부 지역 인원이 전체 조 개수({total_teams}개)보다 많아 발생한 불가피한 중복입니다.")
+                        else:
+                            st.error("⚠️ 남은 인원 구조상 불가피하게 겹친 내역입니다.")
+                        st.dataframe(pd.DataFrame(team_errors), use_container_width=True, hide_index=True)
+
+                    # [2] 타순 평탄화 검증
+                    st.markdown("<br>**■ 지역별 타순 분포 및 누락 현황**", unsafe_allow_html=True)
+                    validation_order = pd.crosstab(final_df['지역'], final_df['타순'])
+                    order_errors = []
+                    
+                    for r_idx in validation_order.index:
+                        r_total = df[df['지역'] == r_idx].shape[0]
+                        zeros = validation_order.columns[validation_order.loc[r_idx] == 0].tolist()
+                        
+                        if r_total >= players and zeros:
+                            order_errors.append({
+                                '지역': r_idx, 
+                                '지역 총 인원': f"{r_total}명", 
+                                '한 번도 못해본 타순': ", ".join(map(lambda x: f"{x}번", zeros))
+                            })
+                            
+                    if not order_errors:
+                        st.success(f"✅ 완벽합니다! 인원이 충분한 모든 지역 선수가 1번부터 {players}번 타순까지 고르게 경험했습니다.")
+                    else:
+                        st.error("⚠️ 타순 배정 오류 (아래 지역의 타순 누락 내역을 확인하세요.)")
+                        st.dataframe(pd.DataFrame(order_errors), use_container_width=True, hide_index=True)
+                        
+                    st.caption("참고: 각 지역 선수가 특정 타순을 배정받은 총 횟수입니다. (가로줄의 숫자 차이가 1 이하일수록 평탄화가 잘 된 것입니다)")
+                    st.dataframe(validation_order, use_container_width=True)
+
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        final_df.to_excel(writer, index=False, sheet_name=f'{match_type}_대진표')
+                        validation_team.to_excel(writer, sheet_name='조별_지역검증')
+                        validation_order.to_excel(writer, sheet_name='지역별_타순검증')
+                    processed_data = output.getvalue()
+                    
+                    st.markdown("---")
+                    st.download_button(
+                        label=f"📥 {match_type} 대진표 및 검증리포트 엑셀 다운로드",
+                        data=processed_data,
+                        file_name=f"제18회_대한체육회장배_{match_type}_대진표_최종.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+    except Exception as e:
+        # 안전한 에러 메시지 출력
+        st.error(
+            f"오류가 발생했습니다. "
+            f"원본 엑셀 파일을 다시 확인해 주세요: {e}"
+        )
