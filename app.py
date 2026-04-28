@@ -29,7 +29,10 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
         
         for p in players:
             # 현재 가장 안 겹치는 조 ➔ 인원이 가장 적은 조 순으로 탐색
-            best_team = min(teams, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
+            best_team = min(
+                teams, 
+                key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
+            )
             best_team.append(p)
             
     else: # 단체전 (여성 우선 배치 후 남은 인원 분산)
@@ -42,7 +45,8 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
         # 각 조에 여자 선수 2명씩, 지역 안 겹치게 우선 배정
         for team in teams:
             for _ in range(2):
-                if not females: break
+                if not females: 
+                    break
                 min_overlap = min(sum(1 for x in team if x['지역'] == f['지역']) for f in females)
                 for i, f in enumerate(females):
                     if sum(1 for x in team if x['지역'] == f['지역']) == min_overlap:
@@ -55,7 +59,10 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
         remaining.sort(key=lambda x: (rem_counts.get(x['지역'], 0), x['지역']), reverse=True)
         
         for p in remaining:
-            best_team = min(teams, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
+            best_team = min(
+                teams, 
+                key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
+            )
             best_team.append(p)
 
     # ==========================================
@@ -83,7 +90,8 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
             if score < best_score:
                 best_score = score
                 best_perm = perm
-                if score == 0: break # 완벽한 조합이면 즉시 확정
+                if score == 0: 
+                    break # 완벽한 조합이면 즉시 확정
                 
         for i, p in enumerate(team):
             p['타순'] = best_perm[i]
@@ -93,16 +101,20 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
     for _ in range(3000):
         usage = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
         for team in teams:
-            for p in team: usage[p['지역']][p['타순']] += 1
+            for p in team: 
+                usage[p['지역']][p['타순']] += 1
                 
         worst_region, worst_skew, worst_over, worst_under = None, -1, -1, -1
         for r, u in usage.items():
             skew = max(u.values()) - min(u.values())
             if skew > worst_skew:
-                worst_skew = skew; worst_region = r
-                worst_over = max(u, key=u.get); worst_under = min(u, key=u.get)
+                worst_skew = skew
+                worst_region = r
+                worst_over = max(u, key=u.get)
+                worst_under = min(u, key=u.get)
                 
-        if worst_skew <= 1: break # 모든 지역의 타순 오차가 1 이하라면 완벽한 상태
+        if worst_skew <= 1: 
+            break # 모든 지역의 타순 오차가 1 이하라면 완벽한 상태
         
         teams_with_over = [t for t in teams if any(p['지역'] == worst_region and p['타순'] == worst_over for p in t)]
         swapped = False
@@ -115,16 +127,21 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
                 r2 = p2['지역']
                 if usage[r2][worst_over] <= usage[r2][worst_under]: # 남에게 피해를 안 줄 때만 교환
                     p1['타순'], p2['타순'] = p2['타순'], p1['타순']
-                    swapped = True; break
+                    swapped = True
+                    break
             elif p1 and not p2:
-                p1['타순'] = worst_under; swapped = True; break
+                p1['타순'] = worst_under
+                swapped = True
+                break
                 
         if not swapped and teams_with_over:
             team = teams_with_over[0]
             p1 = next((p for p in team if p['지역'] == worst_region and p['타순'] == worst_over), None)
             p2 = next((p for p in team if p['타순'] == worst_under), None)
-            if p1 and p2: p1['타순'], p2['타순'] = p2['타순'], p1['타순']
-            elif p1: p1['타순'] = worst_under
+            if p1 and p2: 
+                p1['타순'], p2['타순'] = p2['타순'], p1['타순']
+            elif p1: 
+                p1['타순'] = worst_under
 
     # ==========================================
     # [3] 구장별 정렬 로직 (청 ➔ 백 ➔ 홍 ➔ 황 순서)
@@ -144,13 +161,23 @@ def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_typ
             
         for p in team:
             final_roster.append({
-                '진행 그룹': set_name, '팀': f"{match_type} {team_id}조", '출발홀': start_hole, 
-                '타순': p['타순'], '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
-                '_round_val': round_id, '_field_val': field_val, '_hole_val': hole
+                '진행 그룹': set_name, 
+                '팀': f"{match_type} {team_id}조", 
+                '출발홀': start_hole, 
+                '타순': p['타순'], 
+                '지역': p['지역'], 
+                '이름': p['이름'], 
+                '성별': p['성별'],
+                '_round_val': round_id, 
+                '_field_val': field_val, 
+                '_hole_val': hole
             })
             
     final_df = pd.DataFrame(final_roster)
-    final_df = final_df.sort_values(by=['_round_val', '_field_val', '_hole_val', '타순']).reset_index(drop=True)
+    final_df = final_df.sort_values(
+        by=['_round_val', '_field_val', '_hole_val', '타순']
+    ).reset_index(drop=True)
+    
     final_df = final_df.drop(columns=['_round_val', '_field_val', '_hole_val'])
     
     return final_df, num_teams
@@ -181,7 +208,9 @@ if uploaded_file is not None:
             if st.button(f"🚀 {match_type} 자동 조 편성 실행", type="primary"):
                 with st.spinner("구장별 최적의 배치를 계산 중입니다..."):
                     
-                    final_df, total_teams = assign_teams_and_orders(df, holes_per_field=holes, players_per_team=players, match_type=match_type)
+                    final_df, total_teams = assign_teams_and_orders(
+                        df, holes_per_field=holes, players_per_team=players, match_type=match_type
+                    )
                     
                     st.subheader(f"🎉 {match_type} 대진표 편성 완료 (총 {total_teams}개 조)")
                     st.dataframe(final_df, use_container_width=True)
@@ -197,68 +226,9 @@ if uploaded_file is not None:
                     
                     for region_idx in validation_team.index:
                         region_total_players = df[df['지역'] == region_idx].shape[0]
-                        is_unavoidable = region_total_players > total_teams # 지역 인원이 총 조 개수보다 많은 경우
+                        # 지역 인원이 총 조 개수보다 많은 경우 불가피한 중복으로 판단
+                        is_unavoidable = region_total_players > total_teams 
                         
                         for team_col in validation_team.columns:
                             count = validation_team.loc[region_idx, team_col]
                             if count > 1:
-                                team_errors.append({
-                                    '구분': '불가피한 중복' if is_unavoidable else '배치 오류',
-                                    '조 이름': team_col, 
-                                    '중복된 지역': region_idx, 
-                                    '배치 인원': f"{count}명"
-                                })
-                                if is_unavoidable: unavoidable_errors = True
-                                
-                    st.markdown("**■ 한 조에 동일 지역 선수 중복 배치 여부**")
-                    if not team_errors:
-                        st.success("✅ 오류 없음 (모든 조에 동일 지역 선수가 겹치지 않고 안전하게 분리 배치되었습니다.)")
-                    else:
-                        if unavoidable_errors:
-                            st.warning(f"⚠️ 일부 지역 인원이 전체 조 개수({total_teams}개)보다 많아 수학적으로 피할 수 없는 불가피한 중복입니다.")
-                        else:
-                            st.error("⚠️ 남은 인원 구조상 불가피하게 겹친 내역입니다.")
-                        st.dataframe(pd.DataFrame(team_errors), use_container_width=True, hide_index=True)
-
-                    # [2] 타순 평탄화 검증
-                    st.markdown("<br>**■ 지역별 타순 분포 및 누락 현황**", unsafe_allow_html=True)
-                    validation_order = pd.crosstab(final_df['지역'], final_df['타순'])
-                    order_errors = []
-                    
-                    for r_idx in validation_order.index:
-                        r_total = df[df['지역'] == r_idx].shape[0]
-                        zeros = validation_order.columns[validation_order.loc[r_idx] == 0].tolist()
-                        
-                        if r_total >= players and zeros:
-                            order_errors.append({
-                                '지역': r_idx, 
-                                '지역 총 인원': f"{r_total}명", 
-                                '한 번도 못해본 타순': ", ".join(map(lambda x: f"{x}번", zeros))
-                            })
-                            
-                    if not order_errors:
-                        st.success(f"✅ 완벽합니다! 인원이 충분한 모든 지역 선수가 1번부터 {players}번 타순까지 한 번 이상 고르게 경험했습니다.")
-                    else:
-                        st.error("⚠️ 타순 배정 오류 (아래 지역의 타순 누락 내역을 확인하세요.)")
-                        st.dataframe(pd.DataFrame(order_errors), use_container_width=True, hide_index=True)
-                        
-                    # 타순 전체 분포표 시각화
-                    st.caption("참고: 각 지역 선수가 특정 타순을 배정받은 총 횟수입니다. (가로줄의 숫자 차이가 1 이하일수록 평탄화가 잘 된 것입니다)")
-                    st.dataframe(validation_order, use_container_width=True)
-
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                        final_df.to_excel(writer, index=False, sheet_name=f'{match_type}_대진표')
-                        validation_team.to_excel(writer, sheet_name='조별_지역검증')
-                        validation_order.to_excel(writer, sheet_name='지역별_타순검증')
-                    processed_data = output.getvalue()
-                    
-                    st.markdown("---")
-                    st.download_button(
-                        label=f"📥 {match_type} 대진표 및 검증리포트 엑셀 다운로드",
-                        data=processed_data,
-                        file_name=f"제18회_대한체육회장배_{match_type}_대진표_최종.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-    except Exception as e:
-        st.error(f"오류가 발생했습니다. 원본 엑셀 파일을 다시 확인해 주세요: {e}")
