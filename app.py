@@ -15,7 +15,7 @@ try:
     def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
         working_df = df.copy()
         
-        # 성별 및 지역 데이터 강제 정제 (쓰레기값 방지)
+        # 성별 및 지역 데이터 강제 정제
         working_df['성별'] = working_df['성별'].astype(str).str.strip().str[0] 
         working_df['지역'] = working_df['지역'].astype(str).str.strip()
         
@@ -31,19 +31,20 @@ try:
             r_counts = working_df['지역'].value_counts().to_dict()
             players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
             for p in players:
-                # 💡 [정원 초과 방지] 무조건 자리가 남은 조에만 배정
                 allowed = [t for t in teams if len(t) < players_per_team]
-                if not allowed: allowed = teams # 예외 방지용
+                if not allowed: allowed = teams
                 
-                # 지역 중복이 가장 적은 조 선택
-                best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
+                best_team = min(
+                    allowed, 
+                    key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
+                )
                 best_team.append(p)
                 
         else: 
             females = working_df[working_df['성별'] == '여'].to_dict('records')
             males = working_df[working_df['성별'] == '남'].to_dict('records')
             
-            # 단체전: 여성 먼저 각 조 2명씩 배정
+            # 단체전 여성 먼저 배정
             for team in teams:
                 for _ in range(2):
                     if not females: break
@@ -61,11 +62,17 @@ try:
                 allowed = [t for t in teams if len(t) < players_per_team]
                 if not allowed: allowed = teams
                 
-                best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
+                best_team = min(
+                    allowed, 
+                    key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t))
+                )
                 best_team.append(p)
 
-        # 타순 평탄화 (지역별 골고루 배치)
-        region_order_count = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
+        # 타순 평탄화
+        region_order_count = {
+            r: {i: 0 for i in range(1, players_per_team + 1)} 
+            for r in working_df['지역'].unique()
+        }
         for team in teams:
             avail_orders = list(range(1, players_per_team + 1))
             best_perm = None
@@ -92,17 +99,29 @@ try:
             round_id = (idx // (4 * holes_per_field)) + 1
             
             s_hole = f"{field_name}구장 {hole}홀"
-            set_name = f"{round_id}그룹 {field_name}구장" if len(teams) > holes_per_field * 4 else f"{field_name}구장"
+            if len(teams) > holes_per_field * 4:
+                set_name = f"{round_id}그룹 {field_name}구장"
+            else:
+                set_name = f"{field_name}구장"
                 
             for p in team:
                 final_roster.append({
-                    '진행 그룹': set_name, '팀': f"{match_type} {idx+1}조", 
-                    '구장': field_name, '홀': hole, '타순': p['타순'], 
-                    '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
-                    '_r': round_id, '_f': f_idx, '_h': hole
+                    '진행 그룹': set_name, 
+                    '팀': f"{match_type} {idx+1}조", 
+                    '구장': field_name, 
+                    '홀': hole, 
+                    '타순': p['타순'], 
+                    '지역': p['지역'], 
+                    '이름': p['이름'], 
+                    '성별': p['성별'],
+                    '_r': round_id, 
+                    '_f': f_idx, 
+                    '_h': hole
                 })
                 
-        res_df = pd.DataFrame(final_roster).sort_values(by=['_r', '_f', '_h', '타순']).reset_index(drop=True)
+        res_df = pd.DataFrame(final_roster).sort_values(
+            by=['_r', '_f', '_h', '타순']
+        ).reset_index(drop=True)
         return res_df.drop(columns=['_r', '_f', '_h']), num_teams, region_order_count
 
     # ==========================================
@@ -112,8 +131,12 @@ try:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
-            header_fmt = workbook.add_format({'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'align': 'center'})
-            cell_fmt = workbook.add_format({'border': 1, 'align': 'center'})
+            header_fmt = workbook.add_format({
+                'bold': True, 'bg_color': '#D9EAD3', 'border': 1, 'align': 'center'
+            })
+            cell_fmt = workbook.add_format({
+                'border': 1, 'align': 'center'
+            })
             
             for f_name in ['청', '백', '홍', '황']:
                 f_df = df[df['구장'] == f_name]
@@ -121,7 +144,10 @@ try:
                 
                 worksheet = workbook.add_worksheet(f"{f_name}구장 대진표")
                 worksheet.set_column('A:N', 10)
-                worksheet.write(0, 0, f"제18회 대한체육회장배 {match_type} 대진표 ({f_name}구장)", workbook.add_format({'bold': True, 'font_size': 14}))
+                
+                title_text = f"제18회 대한체육회장배 {match_type} 대진표 ({f_name}구장)"
+                title_fmt = workbook.add_format({'bold': True, 'font_size': 14})
+                worksheet.write(0, 0, title_text, title_fmt)
                 
                 row = 3
                 for h in range(1, holes_cnt + 1, 2):
@@ -134,11 +160,89 @@ try:
                         worksheet.write(row, c+7, text, header_fmt)
                     row += 1
                     
-                    for i in range(max(len(h1_data), len(h2_data), 6)):
+                    max_len = max(len(h1_data), len(h2_data), 6)
+                    for i in range(max_len):
                         if i < len(h1_data):
                             p = h1_data.iloc[i]
-                            worksheet.write(row+i, 0, h if i==0 else "", cell_fmt)
+                            val_h = h if i == 0 else ""
+                            worksheet.write(row+i, 0, val_h, cell_fmt)
                             worksheet.write(row+i, 1, p['타순'], cell_fmt)
                             worksheet.write(row+i, 2, p['지역'], cell_fmt)
                             worksheet.write(row+i, 3, p['이름'], cell_fmt)
-                            worksheet.write(row+i, 4, p['
+                            worksheet.write(row+i, 4, p['성별'], cell_fmt)
+                            worksheet.write(row+i, 5, "", cell_fmt)
+                        if i < len(h2_data):
+                            p = h2_data.iloc[i]
+                            val_h2 = h+1 if i == 0 else ""
+                            worksheet.write(row+i, 7, val_h2, cell_fmt)
+                            worksheet.write(row+i, 8, p['타순'], cell_fmt)
+                            worksheet.write(row+i, 9, p['지역'], cell_fmt)
+                            worksheet.write(row+i, 10, p['이름'], cell_fmt)
+                            worksheet.write(row+i, 11, p['성별'], cell_fmt)
+                            worksheet.write(row+i, 12, "", cell_fmt)
+                    row += max_len + 1
+        return output.getvalue()
+
+    # ==========================================
+    # [기능 3] 채점 데이터 로드 및 정규화
+    # ==========================================
+    def load_score_data(file, sheet_name, days):
+        df = pd.read_excel(file, sheet_name=sheet_name, skiprows=2, header=None)
+        cols = [
+            '일시', '조', '타순', '소속', '이름', 
+            '1_총', '1_2', '1_홀', 
+            '2_총', '2_2', '2_홀', 
+            '3_총', '3_2', '3_홀', 
+            '최_총', '최_2', '최_홀'
+        ]
+        if days == "1일차 대회": 
+            df = df.iloc[:, :11].copy()
+            df.columns = cols[:8] + cols[14:17]
+            df['2_총'], df['2_2'], df['2_홀'] = 0, 0, 0
+            df['3_총'], df['3_2'], df['3_홀'] = 0, 0, 0
+        elif days == "2일차 대회": 
+            df = df.iloc[:, :14].copy()
+            df.columns = cols[:11] + cols[14:17]
+            df['3_총'], df['3_2'], df['3_홀'] = 0, 0, 0
+        else: 
+            df = df.iloc[:, :17].copy()
+            df.columns = cols
+            
+        df = df.dropna(subset=['이름', '소속'])
+        num_cols = [
+            '1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', 
+            '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀'
+        ]
+        for c in num_cols: 
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
+        return df
+
+    # ==========================================
+    # [메인 화면 UI]
+    # ==========================================
+    st.sidebar.title("⛳ 운영 통합 시스템")
+    mode = st.sidebar.radio("작업 선택", ["대진표 편성", "대회 채점"])
+
+    if mode == "대진표 편성":
+        st.title("⛳ 대진표 자동 편성")
+        m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전"])
+        h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
+        p_cnt = st.sidebar.radio("조당 인원", [6, 7, 8], index=0)
+        
+        up_file = st.file_uploader("선수 명단 엑셀 업로드", type=["xlsx"])
+        
+        if up_file:
+            try:
+                xls = pd.ExcelFile(up_file)
+                sheet_names = xls.sheet_names
+                selected_sheet = st.selectbox("📂 명단이 들어있는 엑셀 시트를 정확히 선택하세요", sheet_names)
+                
+                df_raw = pd.read_excel(up_file, sheet_name=selected_sheet, header=None)
+                header_idx = 0
+                for i, row in df_raw.iterrows():
+                    row_str = row.astype(str).str.replace(" ", "").tolist()
+                    if '이름' in row_str or '성명' in row_str:
+                        header_idx = i
+                        break
+                        
+                df_raw.columns = df_raw.iloc
