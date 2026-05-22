@@ -16,6 +16,7 @@ try:
         working_df = df.copy()
         
         working_df['성별'] = working_df['성별'].astype(str).str.strip().str[0] 
+        working_df['성별'] = working_df['성별'].apply(lambda x: '여' if x == '여' else '남')
         working_df['지역'] = working_df['지역'].astype(str).str.strip()
         
         num_teams = (len(working_df) + players_per_team - 1) // players_per_team
@@ -25,39 +26,24 @@ try:
         teams = [[] for _ in range(num_teams)]
         fields = ['청', '백', '홍', '황']
         
-        if match_type == "개인전":
-            players = working_df.to_dict('records')
-            r_counts = working_df['지역'].value_counts().to_dict()
-            players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
-            for p in players:
-                allowed = [t for t in teams if len(t) < players_per_team]
-                if not allowed: allowed = teams
-                
-                best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
-                best_team.append(p)
-                
-        else: 
-            females = working_df[working_df['성별'] == '여'].to_dict('records')
-            males = working_df[working_df['성별'] == '남'].to_dict('records')
+        players = working_df.to_dict('records')
+        females = [p for p in players if p['성별'] == '여']
+        males = [p for p in players if p['성별'] == '남']
+        
+        r_counts = working_df['지역'].value_counts().to_dict()
+        females.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
+        males.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
+        
+        for p in females + males:
+            allowed = [t for t in teams if len(t) < players_per_team]
+            if not allowed: allowed = teams
             
-            for team in teams:
-                for _ in range(2):
-                    if not females: break
-                    min_overlap = min(sum(1 for x in team if x['지역'] == f['지역']) for f in females)
-                    for i, f in enumerate(females):
-                        if sum(1 for x in team if x['지역'] == f['지역']) == min_overlap:
-                            team.append(females.pop(i))
-                            break
-                            
-            rem = females + males
-            rem_counts = pd.Series([p['지역'] for p in rem]).value_counts().to_dict()
-            rem.sort(key=lambda x: (rem_counts.get(x['지역'], 0), x['지역']), reverse=True)
-            for p in rem:
-                allowed = [t for t in teams if len(t) < players_per_team]
-                if not allowed: allowed = teams
-                
-                best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['지역'] == p['지역']), len(t)))
-                best_team.append(p)
+            best_team = min(allowed, key=lambda t: (
+                sum(1 for x in t if x['지역'] == p['지역']),
+                sum(1 for x in t if x['성별'] == p['성별']),
+                len(t)
+            ))
+            best_team.append(p)
 
         region_order_count = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
         for team in teams:
@@ -191,7 +177,7 @@ try:
     mode = st.sidebar.radio("작업 선택", ["대진표 편성", "대회 채점"])
 
     if mode == "대진표 편성":
-        st.title("⛳ 대진표 자동 편성")
+        st.title("⛳ 대진표 자동 편성 (엄격 명단 스캐너)")
         m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전"])
         h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
         p_cnt = st.sidebar.radio("조당 인원", [6, 7, 8], index=0)
@@ -205,53 +191,74 @@ try:
                 selected_sheet = st.selectbox("📂 명단이 들어있는 엑셀 시트를 정확히 선택하세요", sheet_names)
                 
                 df_raw = pd.read_excel(up_file, sheet_name=selected_sheet, header=None)
-                header_idx = 0
+                
+                header_idx = -1
+                
                 for i, row in df_raw.iterrows():
-                    row_str = row.astype(str).str.replace(" ", "").tolist()
-                    if '이름' in row_str or '성명' in row_str:
+                    row_str = row.astype(str).str.replace(" ", "").str.replace("\n", "").tolist()
+                    if '이름' in row_str or '성명' in row_str or '선수명' in row_str:
                         header_idx = i
                         break
-                        
-                df_raw.columns = df_raw.iloc[header_idx].astype(str).str.strip()
-                df_raw = df_raw.iloc[header_idx+1:].reset_index(drop=True)
-                df_raw = df_raw.rename(columns={'소속': '지역', '성명': '이름'})
                 
-                if '이름' not in df_raw.columns:
-                    st.error("❌ 선택하신 시트에서 [이름(또는 성명)] 열을 찾을 수 없습니다. 시트를 다시 확인해 주세요.")
+                if header_idx == -1:
+                    st.error("❌ 선택하신 시트에서 [이름] 또는 [성명] 항목을 찾을 수 없습니다.")
                 else:
-                    df_raw = df_raw.dropna(subset=['이름'])
-                    df_raw = df_raw[df_raw['이름'].astype(str).str.strip().str.lower() != 'nan']
-                    df_raw = df_raw[df_raw['이름'].astype(str).str.strip() != '']
+                    raw_cols = df_raw.iloc[header_idx].astype(str).str.replace(" ", "").str.replace("\n", "")
+                    df_raw.columns = raw_cols
+                    df_raw = df_raw.iloc[header_idx+1:].reset_index(drop=True)
                     
-                    if '지역' not in df_raw.columns: df_raw['지역'] = '미기재'
-                    if '성별' not in df_raw.columns: df_raw['성별'] = '남'
+                    df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
                     
-                    df_raw['지역'] = df_raw['지역'].fillna('미기재')
-                    df_raw['성별'] = df_raw['성별'].fillna('남')
+                    if '성명' in df_raw.columns: df_raw = df_raw.rename(columns={'성명': '이름'})
+                    if '선수명' in df_raw.columns: df_raw = df_raw.rename(columns={'선수명': '이름'})
+                    if '소속' in df_raw.columns: df_raw = df_raw.rename(columns={'소속': '지역'})
+                    if '시군구' in df_raw.columns: df_raw = df_raw.rename(columns={'시군구': '지역'})
+                    if '클럽' in df_raw.columns: df_raw = df_raw.rename(columns={'클럽': '지역'})
+                    if '남여' in df_raw.columns: df_raw = df_raw.rename(columns={'남여': '성별'})
                     
-                    df_clean = df_raw[['지역', '이름', '성별']].copy()
-                    
-                    st.info(f"총 **{len(df_clean)}명**의 선수 명단을 성공적으로 불러왔습니다.")
-                    
-                    if st.button(f"🚀 {m_type} 대진표 생성 실행"):
-                        res, t_cnt, order_stats = assign_teams_and_orders(df_clean, h_cnt, p_cnt, m_type)
+                    if '이름' not in df_raw.columns or '지역' not in df_raw.columns:
+                        st.error("❌ 엑셀 파일에 [이름] 열과 [지역(소속)] 열이 모두 있어야 합니다.")
+                    else:
+                        # 💡 [핵심 해결] 억지로 당겨오기(ffill) 전면 폐지! 
+                        # 지역 칸의 빈칸, 띄어쓰기 찌꺼기 등을 모두 완벽한 '결측치(nan)'로 만듦
+                        df_raw['지역'] = df_raw['지역'].astype(str).str.strip()
+                        df_raw['지역'] = df_raw['지역'].replace(r'^\s*$', np.nan, regex=True)
+                        df_raw['지역'] = df_raw['지역'].replace(['nan', 'None', 'NaN'], np.nan)
                         
-                        st.subheader(f"✅ {m_type} 편성 완료 (총 {t_cnt}개 조)")
-                        st.dataframe(res, use_container_width=True)
+                        # 이름 칸의 빈칸, 찌꺼기 처리
+                        df_raw['이름'] = df_raw['이름'].astype(str).str.strip()
+                        df_raw['이름'] = df_raw['이름'].replace(r'^\s*$', np.nan, regex=True)
+                        df_raw['이름'] = df_raw['이름'].replace(['nan', 'None', 'NaN'], np.nan)
+                            
+                        # 💡 오직 [지역]과 [이름]이 둘 다 명확하게 타이핑되어 있는 진짜 사람만 남김!
+                        df_clean = df_raw.dropna(subset=['지역', '이름']).copy()
                         
-                        if m_type == "단체전":
-                            st.markdown("---")
-                            st.subheader("📊 단체전 타순 순환 배치 검증 보고서")
-                            order_df = pd.DataFrame(order_stats).T.fillna(0).astype(int)
-                            order_df.columns = [f"{i}번 타순" for i in order_df.columns]
-                            st.dataframe(order_df, use_container_width=True)
+                        if '성별' not in df_clean.columns: df_clean['성별'] = '남'
+                        df_clean['성별'] = df_clean['성별'].fillna('남')
                         
-                        print_excel = create_print_excel(res, m_type, h_cnt)
-                        st.download_button(
-                            label="📥 인쇄용 공식 대진표 다운로드", 
-                            data=print_excel, 
-                            file_name=f"{m_type}_최종_대진표.xlsx"
-                        )
+                        df_clean = df_clean[['지역', '이름', '성별']]
+                        
+                        st.success(f"🎉 숨겨진 오류 데이터 차단 완료! 총 **{len(df_clean)}명**의 선수 명단만 정확하게 불러왔습니다.")
+                        
+                        with st.expander("👉 여기를 눌러 불러온 전체 명단을 확인하세요 (유령 인원 검증)"):
+                            st.dataframe(df_clean[['지역', '이름']].reset_index(drop=True), use_container_width=True)
+                        
+                        if st.button(f"🚀 {m_type} 대진표 생성 실행"):
+                            res, t_cnt, order_stats = assign_teams_and_orders(df_clean, h_cnt, p_cnt, m_type)
+                            
+                            res['성별'] = ""
+                            
+                            st.subheader(f"✅ {m_type} 편성 완료 (총 {t_cnt}개 조)")
+                            
+                            display_cols = ['진행 그룹', '팀', '구장', '홀', '타순', '지역', '이름']
+                            st.dataframe(res[display_cols], use_container_width=True)
+                            
+                            print_excel = create_print_excel(res, m_type, h_cnt)
+                            st.download_button(
+                                label="📥 인쇄용 공식 대진표 다운로드", 
+                                data=print_excel, 
+                                file_name=f"{m_type}_최종_대진표.xlsx"
+                            )
                         
             except Exception as e:
                 st.error(f"엑셀 파일을 처리하는 도중 문제가 발생했습니다: {e}")
