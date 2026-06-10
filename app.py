@@ -3,10 +3,9 @@ import pandas as pd
 import numpy as np
 import io
 import random
-import itertools
 import traceback
 
-st.set_page_config(page_title="그라운드골프 통합 시스템", layout="wide")
+st.set_page_config(page_title="그라운드골프 대진표 시스템", layout="wide")
 
 try:
     # ==========================================
@@ -38,7 +37,9 @@ try:
             allowed = [t for t in teams if len(t) < players_per_team]
             if not allowed: allowed = teams
             
+            # 💡 [핵심] 1순위: 동명이인 피하기 / 2순위: 지역 분산 / 3순위: 성별 섞기
             best_team = min(allowed, key=lambda t: (
+                sum(1 for x in t if x['이름'] == p['이름']),
                 sum(1 for x in t if x['지역'] == p['지역']),
                 sum(1 for x in t if x['성별'] == p['성별']),
                 len(t)
@@ -137,204 +138,10 @@ try:
         return output.getvalue()
 
     # ==========================================
-    # [기능 3] 채점 데이터 로드 및 정규화
-    # ==========================================
-    def load_score_data(file, sheet_name, days):
-        df = pd.read_excel(file, sheet_name=sheet_name, skiprows=2, header=None)
-        cols = [
-            '일시', '조', '타순', '소속', '이름', 
-            '1_총', '1_2', '1_홀', 
-            '2_총', '2_2', '2_홀', 
-            '3_총', '3_2', '3_홀', 
-            '최_총', '최_2', '최_홀'
-        ]
-        if days == "1일차 대회": 
-            df = df.iloc[:, :11].copy()
-            df.columns = cols[:8] + cols[14:17]
-            df['2_총'], df['2_2'], df['2_홀'] = 0, 0, 0
-            df['3_총'], df['3_2'], df['3_홀'] = 0, 0, 0
-        elif days == "2일차 대회": 
-            df = df.iloc[:, :14].copy()
-            df.columns = cols[:11] + cols[14:17]
-            df['3_총'], df['3_2'], df['3_홀'] = 0, 0, 0
-        else: 
-            df = df.iloc[:, :17].copy()
-            df.columns = cols
-            
-        df = df.dropna(subset=['이름', '소속'])
-        num_cols = [
-            '1_총', '1_2', '1_홀', '2_총', '2_2', '2_홀', 
-            '3_총', '3_2', '3_홀', '최_총', '최_2', '최_홀'
-        ]
-        for c in num_cols: 
-            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0).astype(int)
-        return df
-
-    # ==========================================
     # [메인 화면 UI]
     # ==========================================
-    st.sidebar.title("⛳ 운영 통합 시스템")
-    mode = st.sidebar.radio("작업 선택", ["대진표 편성", "대회 채점"])
-
-    if mode == "대진표 편성":
-        st.title("⛳ 대진표 자동 편성 (엄격 명단 스캐너)")
-        m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전"])
-        h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
-        p_cnt = st.sidebar.radio("조당 인원", [6, 7, 8], index=0)
-        
-        up_file = st.file_uploader("선수 명단 엑셀 업로드", type=["xlsx"])
-        
-        if up_file:
-            try:
-                xls = pd.ExcelFile(up_file)
-                sheet_names = xls.sheet_names
-                selected_sheet = st.selectbox("📂 명단이 들어있는 엑셀 시트를 정확히 선택하세요", sheet_names)
-                
-                df_raw = pd.read_excel(up_file, sheet_name=selected_sheet, header=None)
-                
-                header_idx = -1
-                
-                for i, row in df_raw.iterrows():
-                    row_str = row.astype(str).str.replace(" ", "").str.replace("\n", "").tolist()
-                    if '이름' in row_str or '성명' in row_str or '선수명' in row_str:
-                        header_idx = i
-                        break
-                
-                if header_idx == -1:
-                    st.error("❌ 선택하신 시트에서 [이름] 또는 [성명] 항목을 찾을 수 없습니다.")
-                else:
-                    raw_cols = df_raw.iloc[header_idx].astype(str).str.replace(" ", "").str.replace("\n", "")
-                    df_raw.columns = raw_cols
-                    df_raw = df_raw.iloc[header_idx+1:].reset_index(drop=True)
-                    
-                    df_raw = df_raw.loc[:, ~df_raw.columns.duplicated()]
-                    
-                    if '성명' in df_raw.columns: df_raw = df_raw.rename(columns={'성명': '이름'})
-                    if '선수명' in df_raw.columns: df_raw = df_raw.rename(columns={'선수명': '이름'})
-                    if '소속' in df_raw.columns: df_raw = df_raw.rename(columns={'소속': '지역'})
-                    if '시군구' in df_raw.columns: df_raw = df_raw.rename(columns={'시군구': '지역'})
-                    if '클럽' in df_raw.columns: df_raw = df_raw.rename(columns={'클럽': '지역'})
-                    if '남여' in df_raw.columns: df_raw = df_raw.rename(columns={'남여': '성별'})
-                    
-                    if '이름' not in df_raw.columns or '지역' not in df_raw.columns:
-                        st.error("❌ 엑셀 파일에 [이름] 열과 [지역(소속)] 열이 모두 있어야 합니다.")
-                    else:
-                        # 💡 [핵심 해결] 억지로 당겨오기(ffill) 전면 폐지! 
-                        # 지역 칸의 빈칸, 띄어쓰기 찌꺼기 등을 모두 완벽한 '결측치(nan)'로 만듦
-                        df_raw['지역'] = df_raw['지역'].astype(str).str.strip()
-                        df_raw['지역'] = df_raw['지역'].replace(r'^\s*$', np.nan, regex=True)
-                        df_raw['지역'] = df_raw['지역'].replace(['nan', 'None', 'NaN'], np.nan)
-                        
-                        # 이름 칸의 빈칸, 찌꺼기 처리
-                        df_raw['이름'] = df_raw['이름'].astype(str).str.strip()
-                        df_raw['이름'] = df_raw['이름'].replace(r'^\s*$', np.nan, regex=True)
-                        df_raw['이름'] = df_raw['이름'].replace(['nan', 'None', 'NaN'], np.nan)
-                            
-                        # 💡 오직 [지역]과 [이름]이 둘 다 명확하게 타이핑되어 있는 진짜 사람만 남김!
-                        df_clean = df_raw.dropna(subset=['지역', '이름']).copy()
-                        
-                        if '성별' not in df_clean.columns: df_clean['성별'] = '남'
-                        df_clean['성별'] = df_clean['성별'].fillna('남')
-                        
-                        df_clean = df_clean[['지역', '이름', '성별']]
-                        
-                        st.success(f"🎉 숨겨진 오류 데이터 차단 완료! 총 **{len(df_clean)}명**의 선수 명단만 정확하게 불러왔습니다.")
-                        
-                        with st.expander("👉 여기를 눌러 불러온 전체 명단을 확인하세요 (유령 인원 검증)"):
-                            st.dataframe(df_clean[['지역', '이름']].reset_index(drop=True), use_container_width=True)
-                        
-                        if st.button(f"🚀 {m_type} 대진표 생성 실행"):
-                            res, t_cnt, order_stats = assign_teams_and_orders(df_clean, h_cnt, p_cnt, m_type)
-                            
-                            res['성별'] = ""
-                            
-                            st.subheader(f"✅ {m_type} 편성 완료 (총 {t_cnt}개 조)")
-                            
-                            display_cols = ['진행 그룹', '팀', '구장', '홀', '타순', '지역', '이름']
-                            st.dataframe(res[display_cols], use_container_width=True)
-                            
-                            print_excel = create_print_excel(res, m_type, h_cnt)
-                            st.download_button(
-                                label="📥 인쇄용 공식 대진표 다운로드", 
-                                data=print_excel, 
-                                file_name=f"{m_type}_최종_대진표.xlsx"
-                            )
-                        
-            except Exception as e:
-                st.error(f"엑셀 파일을 처리하는 도중 문제가 발생했습니다: {e}")
-
-    elif mode == "대회 채점":
-        st.title("🏆 대회 통합 채점 시스템")
-        d_set = st.sidebar.radio("대회 일정", ["1일차 대회", "2일차 대회", "3일차 대회"])
-        up_score = st.file_uploader("채점표 엑셀 업로드", type=["xlsx"])
-        
-        if up_score:
-            t1, t2 = st.tabs(["🥇 개인전", "🤝 단체전"])
-            
-            with t1:
-                try:
-                    df_p = load_score_data(up_score, '개인전 채점표', d_set)
-                    
-                    df_p['최_총'] = df_p['1_총'] + df_p['2_총'] + df_p['3_총']
-                    df_p['최_2'] = df_p['1_2'] + df_p['2_2'] + df_p['3_2']
-                    df_p['최_홀'] = df_p['1_홀'] + df_p['2_홀'] + df_p['3_홀']
-                    
-                    df_p = df_p.sort_values(
-                        by=['최_총','최_2','최_홀'], 
-                        ascending=[True,False,False]
-                    ).reset_index(drop=True)
-                    
-                    df_p['순위'] = df_p[['최_총','최_2','최_홀']].apply(
-                        lambda x: (-x['최_총'], x['최_2'], x['최_홀']), axis=1
-                    ).rank(method='min', ascending=False).astype(int)
-                    
-                    st.subheader(f"🥇 개인전 순위표 ({d_set})")
-                    display_cols_p = ['순위', '소속', '이름', '최_총', '최_2', '최_홀']
-                    st.dataframe(df_p[display_cols_p], hide_index=True)
-                except Exception as e: 
-                    st.error(f"개인전 시트에서 오류가 발생했습니다: {e}")
-                    
-            with t2:
-                try:
-                    df_t = load_score_data(up_score, '단체전 채점표', d_set)
-                    
-                    df_t['최_총'] = df_t['1_총'] + df_t['2_총'] + df_t['3_총']
-                    df_t['최_2'] = df_t['1_2'] + df_t['2_2'] + df_t['3_2']
-                    df_t['최_홀'] = df_t['1_홀'] + df_t['2_홀'] + df_t['3_홀']
-                    
-                    res_t = df_t.groupby('소속', as_index=False)[['최_총','최_2','최_홀']].sum()
-                    
-                    res_t = res_t.sort_values(
-                        by=['최_총','최_2','최_홀'], 
-                        ascending=[True,False,False]
-                    ).reset_index(drop=True)
-                    
-                    res_t['순위'] = res_t[['최_총','최_2','최_홀']].apply(
-                        lambda x: (-x['최_총'], x['최_2'], x['최_홀']), axis=1
-                    ).rank(method='min', ascending=False).astype(int)
-                    
-                    st.subheader(f"🤝 단체전 순위표 ({d_set})")
-                    display_cols_t = ['순위', '소속', '최_총', '최_2', '최_홀']
-                    st.dataframe(res_t[display_cols_t], hide_index=True)
-                except Exception as e: 
-                    st.error(f"단체전 시트에서 오류가 발생했습니다: {e}")
-            
-            if 'df_p' in locals() or 'res_t' in locals():
-                st.markdown("---")
-                out_score = io.BytesIO()
-                with pd.ExcelWriter(out_score, engine='xlsxwriter') as wr:
-                    if 'df_p' in locals(): 
-                        df_p.to_excel(wr, index=False, sheet_name='개인전_최종결과')
-                    if 'res_t' in locals(): 
-                        res_t.to_excel(wr, index=False, sheet_name='단체전_최종결과')
-                        
-                st.download_button(
-                    label=f"📥 {d_set} 최종 채점 결과 다운로드", 
-                    data=out_score.getvalue(), 
-                    file_name=f"최종_채점결과({d_set}).xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-except Exception as e:
-    st.error(f"🚨 프로그램 구동 중 치명적인 에러가 발생했습니다: {e}")
-    st.code(traceback.format_exc())
+    st.title("⛳ 그라운드골프 대진표 편성 시스템")
+    
+    st.sidebar.title("⚙️ 편성 설정")
+    m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전"])
+    h_cnt = st.sidebar.
