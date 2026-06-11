@@ -191,3 +191,56 @@ try:
     
     if m_type == "통합 (단체전 ➔ 개인전 이어서)":
         st.info("💡 통합 편성: **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요.")
+        col1, col2 = st.columns(2)
+        with col1: df_raw_team = load_data_ui("단체전", data_source)
+        with col2: df_raw_indiv = load_data_ui("개인전", data_source)
+        
+        if df_raw_team is not None and df_raw_indiv is not None:
+            clean_t, err_t = process_raw_data(df_raw_team, "단체전")
+            clean_i, err_i = process_raw_data(df_raw_indiv, "개인전")
+            if err_t: st.error(err_t)
+            elif err_i: st.error(err_i)
+            else: df_clean = pd.concat([clean_t, clean_i], ignore_index=True)
+    else:
+        df_raw = load_data_ui(m_type, data_source)
+        if df_raw is not None:
+            df_clean, err = process_raw_data(df_raw, m_type)
+            if err: st.error(err)
+
+    if df_clean is not None:
+        dup_mask = df_clean.duplicated(subset=['이름'], keep=False)
+        if dup_mask.any():
+            df_clean.loc[dup_mask, '이름'] += "(" + df_clean.loc[dup_mask, '지역'] + ")"
+            
+        st.info(f"✨ 총 **{len(df_clean)}명** 데이터 스캔 완료! (동명이인 자동 분리 적용)")
+        
+        with st.expander("👉 정리된 전체 명단 확인 (클릭)"):
+            df_show = df_clean.reset_index(drop=True)
+            df_show.index += 1
+            st.dataframe(df_show, use_container_width=True)
+        
+        st.markdown("---")
+        
+        if st.button(f"🚀 {m_type} 생성 실행", use_container_width=True):
+            res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team, m_type)
+            
+            st.subheader(f"✅ 편성 완료 (총 {t_cnt}조)")
+            disp_cols = ['대진표', '경기', '팀', '구장', '홀', '타순', '부문', '지역', '이름']
+            
+            res_show = res[disp_cols].copy()
+            res_show.index += 1
+            st.dataframe(res_show, use_container_width=True)
+            
+            st.write("#### 💾 결과물 다운로드")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.download_button("🖨️ 인쇄용 대진표 (격자형)", data=create_print_excel(res, m_type, h_cnt), file_name=f"{m_type}_대진표.xlsx", use_container_width=True)
+            with col2:
+                buf = io.BytesIO()
+                res[disp_cols].to_excel(buf, index=False, sheet_name="검증용_명단")
+                st.download_button("📋 검증용 명단 (엑셀형)", data=buf.getvalue(), file_name=f"{m_type}_명단검증.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
+except Exception as e:
+    st.error(f"🚨 시스템 오류: {e}")
+    st.code(traceback.format_exc())
