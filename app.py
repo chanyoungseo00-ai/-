@@ -9,7 +9,7 @@ st.set_page_config(page_title="그라운드골프 대진표 시스템", layout="
 
 try:
     # ==========================================
-    # [기능 1] 대진표 자동 편성 로직 (통합 편성 적용)
+    # [기능 1] 대진표 자동 편성 로직 
     # ==========================================
     def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
         working_df = df.copy()
@@ -20,7 +20,6 @@ try:
         
         players = working_df.to_dict('records')
         
-        # 💡 [핵심] 단체전 빈자리에 개인전을 욱여넣는 '통합 편성' 로직
         if match_type == "통합 (단체전 ➔ 개인전 이어서)":
             team_players = [p for p in players if '단체' in str(p.get('부문', ''))]
             indiv_players = [p for p in players if '단체' not in str(p.get('부문', ''))]
@@ -79,7 +78,6 @@ try:
                 ))
                 best_team.append(p)
 
-        # 타순 평탄화
         region_order_count = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in working_df['지역'].unique()}
         for team in teams:
             avail_orders = list(range(1, players_per_team + 1))
@@ -114,7 +112,6 @@ try:
                     '홀': hole, 
                     '팀': f"{idx+1}조", 
                     '타순': p['타순'], 
-                    # 💡 [핵심] 원본 엑셀 형태와 동일한 '대진표' (예: 청 1 2) 텍스트 자동 생성
                     '대진표': f"{field_name} {hole} {p['타순']}",
                     '부문': p.get('부문', match_type),
                     '지역': p['지역'], 
@@ -129,7 +126,7 @@ try:
         return res_df.drop(columns=['_r', '_f', '_h']), num_teams, region_order_count
 
     # ==========================================
-    # [기능 2] 인쇄용 대진표 엑셀 출력 양식 (부문 추가)
+    # [기능 2] 인쇄용 대진표 엑셀 출력 양식
     # ==========================================
     def create_print_excel(df, match_type, holes_cnt):
         output = io.BytesIO()
@@ -300,7 +297,10 @@ try:
                     st.info(f"✨ 총 **{len(df_clean)}명** 스캔 완료! (동명이인 자동 분리 완료)")
                     
                     with st.expander("👉 전체 명단 꼼꼼히 확인하기 (클릭)"):
-                        st.dataframe(df_clean.reset_index(drop=True), use_container_width=True)
+                        # 💡 [핵심] 0번이 아닌 1번부터 순번(Index) 시작!
+                        df_show = df_clean.reset_index(drop=True)
+                        df_show.index = df_show.index + 1
+                        st.dataframe(df_show, use_container_width=True)
                     
                     st.markdown("---")
                     
@@ -311,16 +311,18 @@ try:
                         
                         st.subheader(f"✅ {m_type} 편성 완료 (총 {t_cnt}개 조)")
                         
-                        # 💡 화면의 검증표에 '대진표' (예: 청 1 2) 항목을 정식으로 추가!
                         display_cols = ['대진표', '경기', '팀', '구장', '홀', '타순', '부문', '지역', '이름']
-                        st.dataframe(res[display_cols], use_container_width=True)
+                        
+                        # 💡 [핵심] 결과 창의 순번(Index)도 1번부터 시작!
+                        res_show = res[display_cols].copy()
+                        res_show.index = res_show.index + 1
+                        st.dataframe(res_show, use_container_width=True)
                         
                         st.markdown("---")
                         st.write("#### 💾 결과물 다운로드")
                         
                         col1, col2 = st.columns(2)
                         
-                        # [버튼 1] 인쇄용 격자 모양 대진표
                         with col1:
                             print_excel = create_print_excel(res, m_type, h_cnt)
                             st.download_button(
@@ -330,7 +332,6 @@ try:
                                 use_container_width=True
                             )
                         
-                        # 💡 [버튼 2] 새로 추가된 기능: 엑셀에 다시 붙여넣을 수 있는 검증용 명단(대진표 열 포함)
                         with col2:
                             summary_excel = io.BytesIO()
                             res[display_cols].to_excel(summary_excel, index=False, sheet_name="검증용_명단")
