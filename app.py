@@ -34,44 +34,66 @@ def process_raw_data(df_raw, default_category):
     return df_clean[['지역', '이름', '성별', '부문']], ""
 
 # ==========================================
-# [모듈 2] 대진표 초고속 편성 엔진 (무조건 단체 -> 개인)
+# [모듈 2] 출발홀 수 비례 동적 압축 및 편성 엔진
 # ==========================================
-def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6):
+def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, max_rounds=3):
     players = df.to_dict('records')
     
-    def distribute_players(target_players, target_teams, p_cnt):
-        if not target_players: return
+    # 단체/개인 분리
+    team_players = [p for p in players if '단체' in p.get('부문', '')]
+    indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
+    
+    # 기본 요구 조(팀) 수 계산
+    t_req = (len(team_players) + p_cnt_team - 1) // p_cnt_team if team_players else 0
+    i_req = (len(indiv_players) + p_cnt_indiv - 1) // p_cnt_indiv if indiv_players else 0
+    
+    # 💡 8홀*3부 = 96경기, 6홀*4부 = 96경기 한계치 계산
+    max_limit = holes_per_field * 4 * max_rounds
+    
+    if t_req + i_req > max_limit:
+        st.warning(f"⚠️ 인원이 초과되어 총 **{max_limit}조** (1부당 {holes_per_field*4}조 × {max_rounds}부) 제한에 맞추어 조당 인원이 자동으로 확장(압축)되었습니다.")
+        if t_req >= max_limit:
+            total_p = len(team_players) + len(indiv_players)
+            t_req = int(max_limit * len(team_players) / total_p)
+            i_req = max_limit - t_req
+        else:
+            i_req = max_limit - t_req
+            
+        if t_req == 0 and len(team_players) > 0: t_req = 1; i_req -= 1
+        if i_req == 0 and len(indiv_players) > 0: i_req = 1; t_req -= 1
+
+    team_teams = [[] for _ in range(t_req)]
+    indiv_teams = [[] for _ in range(i_req)]
+    
+    def distribute_players(target_players, target_teams):
+        if not target_players or not target_teams: return
+        p_limit = (len(target_players) + len(target_teams) - 1) // len(target_teams)
         r_counts = pd.Series([p['지역'] for p in target_players]).value_counts().to_dict()
         target_players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
         for p in target_players:
-            allowed = [t for t in target_teams if len(t) < p_cnt] or target_teams
+            allowed = [t for t in target_teams if len(t) < p_limit] or target_teams
             best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['이름'] == p['이름']), sum(1 for x in t if x['지역'] == p['지역']), sum(1 for x in t if x['성별'] == p['성별']), len(t)))
             best_team.append(p)
 
-    def assign_orders(target_teams, p_cnt):
-        region_order_count = {r: {i: 0 for i in range(1, p_cnt + 1)} for r in df['지역'].unique()}
+    def assign_orders(target_teams):
+        if not target_teams: return
+        region_order_count = {r: {i: 0 for i in range(1, 20)} for r in df['지역'].unique()}
         for team in target_teams:
-            avail_orders = list(range(1, len(team) + 1)) # 이빨 빠짐 방지
+            # 배정된 실제 인원수만큼만 번호표를 꺼냄 (중간 뻥 뚫림 차단)
+            avail_orders = list(range(1, len(team) + 1))
             team.sort(key=lambda x: x['지역'])
             for p in team:
                 best_order = min(avail_orders, key=lambda o: region_order_count[p['지역']].get(o, 0))
                 p['타순'] = best_order
                 avail_orders.remove(best_order)
                 region_order_count[p['지역']][best_order] += 1
-
-    # 무조건 단체전과 개인전을 분리하여 진행
-    team_players = [p for p in players if '단체' in p.get('부문', '')]
-    indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
+                
+    distribute_players(team_players, team_teams)
+    distribute_players(indiv_players, indiv_teams)
     
-    team_teams = [[] for _ in range((len(team_players) + p_cnt_team - 1) // p_cnt_team)] if team_players else []
-    indiv_teams = [[] for _ in range((len(indiv_players) + p_cnt_indiv - 1) // p_cnt_indiv)] if indiv_players else []
+    assign_orders(team_teams)
+    assign_orders(indiv_teams)
     
-    distribute_players(team_players, team_teams, p_cnt_team)
-    distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
-    assign_orders(team_teams, p_cnt_team)
-    assign_orders(indiv_teams, p_cnt_indiv)
-    
-    # 단체전 이후에 개인전 조를 이어붙임
     teams = team_teams + indiv_teams
 
     fields = ['청', '백', '홍', '황']
@@ -90,7 +112,7 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6):
             })
             
     res_df = pd.DataFrame(final_roster).sort_values(by=['_r', '_f', '_h', '타순']).reset_index(drop=True)
-    return res_df.drop(columns=['_r', '_f', '_h']), len(teams)
+    return res_df.drop(columns=['_r', '_f', '_h']), len(teams), max_limit
 
 # ==========================================
 # [모듈 3] 인쇄용 엑셀 출력 엔진
@@ -163,13 +185,27 @@ def load_data_ui(label, source_type):
 # [메인 화면 실행부]
 # ==========================================
 try:
+    _, logo_col, _ = st.columns([1, 1.5, 1])
+    with logo_col:
+        try: st.image("Gemini_Generated_Image_yeu46iyeu46iyeu4.png", width=350)
+        except: pass
+
     st.title("⛳ 그라운드골프 통합 대진표 시스템")
     
     st.sidebar.title("⚙️ 편성 설정")
-    # 💡 편성 부문 라디오 버튼 완전 삭제! 무조건 단체 -> 개인으로 작동
-    h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
-    p_cnt_team = st.sidebar.radio("단체전 조당 인원", [6, 7, 8], index=0)
-    p_cnt_indiv = st.sidebar.radio("개인전 조당 인원", [6, 7, 8], index=0)
+    
+    # 💡 [핵심] 홀수와 라운드 수를 따로 고르지 않고, 하나의 세트로 직관적 선택!
+    match_format = st.sidebar.radio("경기 방식 선택", ["8홀 3부 경기", "6홀 4부 경기"])
+    
+    if match_format == "8홀 3부 경기":
+        h_cnt = 8
+        max_r = 3
+    else:
+        h_cnt = 6
+        max_r = 4
+
+    p_cnt_team = st.sidebar.radio("단체전 조당 기본 인원", [6, 7, 8], index=0)
+    p_cnt_indiv = st.sidebar.radio("개인전 조당 기본 인원", [6, 7, 8], index=0)
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📥 데이터 입력 방식")
@@ -177,7 +213,7 @@ try:
     
     df_clean = None
     
-    st.info("💡 **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요. (단체전 조 편성 후 이어서 개인전이 자동 편성됩니다.)")
+    st.info(f"💡 **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요. (단체전 편성 후 개인전이 이어지며, 선택하신 **[{match_format}]**에 따라 최대 96조로 편성 제한됩니다.)")
     col1, col2 = st.columns(2)
     with col1: df_raw_team = load_data_ui("단체전", data_source)
     with col2: df_raw_indiv = load_data_ui("개인전", data_source)
@@ -194,7 +230,7 @@ try:
         if dup_mask.any():
             df_clean.loc[dup_mask, '이름'] += "(" + df_clean.loc[dup_mask, '지역'] + ")"
             
-        st.success(f"✨ 총 **{len(df_clean)}명** 데이터 스캔 완료! (동명이인 자동 분리 적용)")
+        st.success(f"✨ 총 **{len(df_clean)}명** 데이터 스캔 완료! (동명이인 분리 완료)")
         
         with st.expander("👉 정리된 전체 명단 확인 (클릭)"):
             df_show = df_clean.reset_index(drop=True)
@@ -204,11 +240,10 @@ try:
         st.markdown("---")
         
         if st.button("🚀 통합 대진표 생성 실행", use_container_width=True):
-            res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team)
+            res, t_cnt, m_limit = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team, max_r)
             
-            st.subheader(f"✅ 통합 편성 완료 (총 {t_cnt}조)")
+            st.subheader(f"✅ 통합 편성 완료 (총 {t_cnt}조 / 한계 {m_limit}조)")
             
-            # 검증용 정렬 로직 (부문 -> 지역 -> 이름)
             disp_cols = ['부문', '지역', '이름', '성별', '대진표', '경기', '팀', '구장', '홀', '타순']
             res_show = res[disp_cols].copy()
             
