@@ -8,22 +8,18 @@ st.set_page_config(page_title="그라운드골프 대진표 시스템", layout="
 
 try:
     # ==========================================
-    # [기능 1] 대진표 초고속 편성 로직 (경량화 및 시트 분리)
+    # [기능 1] 대진표 초고속 편성 로직 (인원 개별 설정 적용)
     # ==========================================
-    def assign_teams_and_orders(df, holes_per_field=8, players_per_team=6, match_type="개인전"):
+    def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, match_type="개인전"):
         players = df.to_dict('records')
         
-        total_players = len(players)
-        num_teams = (total_players + players_per_team - 1) // players_per_team
-        teams = [[] for _ in range(num_teams)]
-        
-        def distribute_players(target_players, target_teams):
+        def distribute_players(target_players, target_teams, p_cnt):
             if not target_players: return
             r_counts = pd.Series([p['지역'] for p in target_players]).value_counts().to_dict()
             target_players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
             
             for p in target_players:
-                allowed = [t for t in target_teams if len(t) < players_per_team] or target_teams
+                allowed = [t for t in target_teams if len(t) < p_cnt] or target_teams
                 best_team = min(allowed, key=lambda t: (
                     sum(1 for x in t if x['이름'] == p['이름']),
                     sum(1 for x in t if x['지역'] == p['지역']),
@@ -32,36 +28,43 @@ try:
                 ))
                 best_team.append(p)
 
+        def assign_orders(target_teams, p_cnt):
+            region_order_count = {r: {i: 0 for i in range(1, p_cnt + 1)} for r in df['지역'].unique()}
+            for team in target_teams:
+                avail_orders = list(range(1, p_cnt + 1))
+                team.sort(key=lambda x: x['지역'])
+                
+                for p in team:
+                    best_order = min(avail_orders, key=lambda o: region_order_count[p['지역']].get(o, 0))
+                    p['타순'] = best_order
+                    avail_orders.remove(best_order)
+                    region_order_count[p['지역']][best_order] += 1
+
         if match_type == "통합 (단체전 ➔ 개인전 이어서)":
             team_players = [p for p in players if '단체' in p.get('부문', '')]
             indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
             
-            team_teams_cnt = (len(team_players) + players_per_team - 1) // players_per_team if team_players else 0
-            indiv_teams_cnt = (len(indiv_players) + players_per_team - 1) // players_per_team if indiv_players else 0
+            team_teams_cnt = (len(team_players) + p_cnt_team - 1) // p_cnt_team if team_players else 0
+            indiv_teams_cnt = (len(indiv_players) + p_cnt_indiv - 1) // p_cnt_indiv if indiv_players else 0
             
             team_teams = [[] for _ in range(team_teams_cnt)]
             indiv_teams = [[] for _ in range(indiv_teams_cnt)]
             
-            distribute_players(team_players, team_teams)
-            distribute_players(indiv_players, indiv_teams)
+            distribute_players(team_players, team_teams, p_cnt_team)
+            distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
+            
+            assign_orders(team_teams, p_cnt_team)
+            assign_orders(indiv_teams, p_cnt_indiv)
             
             teams = team_teams + indiv_teams
             num_teams = len(teams)
         else:
-            num_teams = (len(players) + players_per_team - 1) // players_per_team
+            current_p_cnt = p_cnt_team if match_type == "단체전" else p_cnt_indiv
+            num_teams = (len(players) + current_p_cnt - 1) // current_p_cnt
             teams = [[] for _ in range(num_teams)]
-            distribute_players(players, teams)
-
-        region_order_count = {r: {i: 0 for i in range(1, players_per_team + 1)} for r in df['지역'].unique()}
-        for team in teams:
-            avail_orders = list(range(1, players_per_team + 1))
-            team.sort(key=lambda x: x['지역'])
             
-            for p in team:
-                best_order = min(avail_orders, key=lambda o: region_order_count[p['지역']].get(o, 0))
-                p['타순'] = best_order
-                avail_orders.remove(best_order)
-                region_order_count[p['지역']][best_order] += 1
+            distribute_players(players, teams, current_p_cnt)
+            assign_orders(teams, current_p_cnt)
 
         fields = ['청', '백', '홍', '황']
         final_roster = []
@@ -155,7 +158,6 @@ try:
         df_clean = df_raw.dropna(subset=['지역', '이름']).copy()
         
         df_clean['성별'] = df_clean.get('성별', '남').fillna('남').astype(str).str.strip().str[0].apply(lambda x: '여' if x == '여' else '남')
-        
         df_clean['부문'] = default_category
         
         return df_clean[['지역', '이름', '성별', '부문']], ""
@@ -172,20 +174,22 @@ try:
     # [메인 화면 UI]
     # ==========================================
 
-    # 💡 [핵심] 위원장님이 선택하신 새 로고 파일 적용!
+    # 💡 [핵심] 위원장님이 올려주신 새 로고 파일 적용 완료!
     _, logo_col, _ = st.columns([1, 1.5, 1])
     with logo_col:
         try:
-            st.image("Gemini_Generated_Image_tltwattltwattltw.png", width=350)
+            st.image("edited-image.jpg", width=350)
         except FileNotFoundError:
-            st.error("⚠️ 로고 이미지 파일('Gemini_Generated_Image_tltwattltwattltw.png')을 코드가 있는 폴더 안에서 찾을 수 없습니다. 파일을 확인해 주세요.")
+            st.error("⚠️ 로고 이미지 파일('edited-image.jpg')을 코드가 있는 폴더 안에서 찾을 수 없습니다. 파일을 확인해 주세요.")
 
     st.title("그라운드골프 대진표 편성 시스템")
     
+    # 💡 [핵심] 단체전 / 개인전 조당 인원을 개별적으로 설정하도록 분리!
     st.sidebar.title("⚙️ 편성 설정")
     m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전", "통합 (단체전 ➔ 개인전 이어서)"])
     h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
-    p_cnt = st.sidebar.radio("조당 인원", [6, 7, 8], index=0)
+    p_cnt_team = st.sidebar.radio("단체전 조당 인원", [6, 7, 8], index=0)
+    p_cnt_indiv = st.sidebar.radio("개인전 조당 인원", [6, 7, 8], index=0)
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📥 데이터 입력 방식")
@@ -279,7 +283,8 @@ try:
             st.markdown("---")
             
             if st.button(f"🚀 {m_type} 생성 실행", use_container_width=True):
-                res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt, m_type)
+                # 💡 선택한 조당 인원(개인전, 단체전)을 각각 전달!
+                res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team, m_type)
                 
                 st.subheader(f"✅ 편성 완료 (총 {t_cnt}조)")
                 disp_cols = ['대진표', '경기', '팀', '구장', '홀', '타순', '부문', '지역', '이름']
