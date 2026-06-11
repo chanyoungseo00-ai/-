@@ -35,7 +35,7 @@ def process_raw_data(df_raw, default_category):
     return df_clean[['지역', '이름', '성별', '부문']], ""
 
 # ==========================================
-# [모듈 2] 대진표 편성 엔진
+# [모듈 2] 대진표 초고속 편성 엔진
 # ==========================================
 def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, match_type="개인전"):
     players = df.to_dict('records')
@@ -44,6 +44,7 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         if not target_players: return
         r_counts = pd.Series([p['지역'] for p in target_players]).value_counts().to_dict()
         target_players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
+        
         for p in target_players:
             allowed = [t for t in target_teams if len(t) < p_cnt] or target_teams
             best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['이름'] == p['이름']), sum(1 for x in t if x['지역'] == p['지역']), sum(1 for x in t if x['성별'] == p['성별']), len(t)))
@@ -69,6 +70,7 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         
         distribute_players(team_players, team_teams, p_cnt_team)
         distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
+        
         assign_orders(team_teams, p_cnt_team)
         assign_orders(indiv_teams, p_cnt_indiv)
         
@@ -168,13 +170,8 @@ def load_data_ui(label, source_type):
 # [메인 화면 실행부]
 # ==========================================
 try:
-    # 로고 적용
-    _, logo_col, _ = st.columns([1, 1.5, 1])
-    with logo_col:
-        try: st.image("Gemini_Generated_Image_yeu46iyeu46iyeu4.png", width=350)
-        except: pass
-
-    st.title("그라운드골프 대진표 편성 시스템")
+    # 💡 로고 이미지 적용 부분을 완전히 삭제했습니다.
+    st.title("⛳ 그라운드골프 대진표 편성 시스템")
     
     st.sidebar.title("⚙️ 편성 설정")
     m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전", "통합 (단체전 ➔ 개인전 이어서)"])
@@ -184,6 +181,7 @@ try:
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📥 데이터 입력 방식")
+    # CSV 옵션을 제외한 "엑셀 파일 업로드"로 유지
     data_source = st.sidebar.radio("명단 가져오기 방식", ["엑셀 파일 업로드", "구글 시트 링크 연결"])
     
     df_clean = None
@@ -207,6 +205,7 @@ try:
             if err: st.error(err)
 
     if df_clean is not None:
+        # 동명이인 처리
         dup_mask = df_clean.duplicated(subset=['이름'], keep=False)
         if dup_mask.any():
             df_clean.loc[dup_mask, '이름'] += "(" + df_clean.loc[dup_mask, '지역'] + ")"
@@ -225,19 +224,16 @@ try:
             
             st.subheader(f"✅ 편성 완료 (총 {t_cnt}조)")
             
-            # 💡 [핵심] 검증을 위해 "부문 -> 지역 -> 이름 -> 대진표" 순으로 열 순서 및 데이터 정렬!
+            # 💡 검증을 위해 "부문 -> 지역 -> 이름 -> 대진표" 순으로 데이터 정렬 유지!
             disp_cols = ['부문', '지역', '이름', '성별', '대진표', '경기', '팀', '구장', '홀', '타순']
             res_show = res[disp_cols].copy()
             
-            # 정렬 로직: 부문(단체전 우선) -> 지역(가나다순) -> 이름(가나다순)
             res_show['sort_key'] = res_show['부문'].apply(lambda x: 0 if '단체' in str(x) else 1)
             res_show = res_show.sort_values(by=['sort_key', '지역', '이름']).drop(columns=['sort_key'])
             
-            # 인덱스를 깔끔하게 1부터 재정렬
             res_show.reset_index(drop=True, inplace=True)
             res_show.index += 1
             
-            # 화면 출력
             st.dataframe(res_show, use_container_width=True)
             
             st.write("#### 💾 결과물 다운로드")
@@ -247,7 +243,6 @@ try:
                 st.download_button("🖨️ 인쇄용 대진표 (격자형)", data=create_print_excel(res, m_type, h_cnt), file_name=f"{m_type}_대진표.xlsx", use_container_width=True)
             with col2:
                 buf = io.BytesIO()
-                # 다운로드 엑셀도 지역순 정렬이 적용된 상태로 추출됩니다!
                 res_show.to_excel(buf, index=False, sheet_name="검증용_명단")
                 st.download_button("📋 검증용 명단 (엑셀형)", data=buf.getvalue(), file_name=f"{m_type}_명단검증.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
