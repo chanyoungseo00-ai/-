@@ -184,7 +184,6 @@ try:
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📥 데이터 입력 방식")
-    # 💡 CSV 옵션을 완전히 제거하고 "엑셀 파일 업로드"로 되돌림
     data_source = st.sidebar.radio("명단 가져오기 방식", ["엑셀 파일 업로드", "구글 시트 링크 연결"])
     
     df_clean = None
@@ -225,10 +224,20 @@ try:
             res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team, m_type)
             
             st.subheader(f"✅ 편성 완료 (총 {t_cnt}조)")
-            disp_cols = ['대진표', '경기', '팀', '구장', '홀', '타순', '부문', '지역', '이름']
             
+            # 💡 [핵심] 검증을 위해 "부문 -> 지역 -> 이름 -> 대진표" 순으로 열 순서 및 데이터 정렬!
+            disp_cols = ['부문', '지역', '이름', '성별', '대진표', '경기', '팀', '구장', '홀', '타순']
             res_show = res[disp_cols].copy()
+            
+            # 정렬 로직: 부문(단체전 우선) -> 지역(가나다순) -> 이름(가나다순)
+            res_show['sort_key'] = res_show['부문'].apply(lambda x: 0 if '단체' in str(x) else 1)
+            res_show = res_show.sort_values(by=['sort_key', '지역', '이름']).drop(columns=['sort_key'])
+            
+            # 인덱스를 깔끔하게 1부터 재정렬
+            res_show.reset_index(drop=True, inplace=True)
             res_show.index += 1
+            
+            # 화면 출력
             st.dataframe(res_show, use_container_width=True)
             
             st.write("#### 💾 결과물 다운로드")
@@ -238,7 +247,8 @@ try:
                 st.download_button("🖨️ 인쇄용 대진표 (격자형)", data=create_print_excel(res, m_type, h_cnt), file_name=f"{m_type}_대진표.xlsx", use_container_width=True)
             with col2:
                 buf = io.BytesIO()
-                res[disp_cols].to_excel(buf, index=False, sheet_name="검증용_명단")
+                # 다운로드 엑셀도 지역순 정렬이 적용된 상태로 추출됩니다!
+                res_show.to_excel(buf, index=False, sheet_name="검증용_명단")
                 st.download_button("📋 검증용 명단 (엑셀형)", data=buf.getvalue(), file_name=f"{m_type}_명단검증.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 except Exception as e:
