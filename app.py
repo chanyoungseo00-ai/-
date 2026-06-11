@@ -34,9 +34,9 @@ def process_raw_data(df_raw, default_category):
     return df_clean[['지역', '이름', '성별', '부문']], ""
 
 # ==========================================
-# [모듈 2] 대진표 초고속 편성 엔진
+# [모듈 2] 대진표 초고속 편성 엔진 (무조건 단체 -> 개인)
 # ==========================================
-def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, match_type="개인전"):
+def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6):
     players = df.to_dict('records')
     
     def distribute_players(target_players, target_teams, p_cnt):
@@ -51,8 +51,7 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
     def assign_orders(target_teams, p_cnt):
         region_order_count = {r: {i: 0 for i in range(1, p_cnt + 1)} for r in df['지역'].unique()}
         for team in target_teams:
-            # 💡 [핵심 해결] 실제 팀에 배정된 인원수(len(team))만큼만 타순(1~N)을 생성하여 중간 번호 뻥 뚫림 방지!
-            avail_orders = list(range(1, len(team) + 1))
+            avail_orders = list(range(1, len(team) + 1)) # 이빨 빠짐 방지
             team.sort(key=lambda x: x['지역'])
             for p in team:
                 best_order = min(avail_orders, key=lambda o: region_order_count[p['지역']].get(o, 0))
@@ -60,24 +59,20 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
                 avail_orders.remove(best_order)
                 region_order_count[p['지역']][best_order] += 1
 
-    if match_type == "통합 (단체전 ➔ 개인전 이어서)":
-        team_players = [p for p in players if '단체' in p.get('부문', '')]
-        indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
-        
-        team_teams = [[] for _ in range((len(team_players) + p_cnt_team - 1) // p_cnt_team)] if team_players else []
-        indiv_teams = [[] for _ in range((len(indiv_players) + p_cnt_indiv - 1) // p_cnt_indiv)] if indiv_players else []
-        
-        distribute_players(team_players, team_teams, p_cnt_team)
-        distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
-        assign_orders(team_teams, p_cnt_team)
-        assign_orders(indiv_teams, p_cnt_indiv)
-        
-        teams = team_teams + indiv_teams
-    else:
-        current_p_cnt = p_cnt_team if match_type == "단체전" else p_cnt_indiv
-        teams = [[] for _ in range((len(players) + current_p_cnt - 1) // current_p_cnt)]
-        distribute_players(players, teams, current_p_cnt)
-        assign_orders(teams, current_p_cnt)
+    # 무조건 단체전과 개인전을 분리하여 진행
+    team_players = [p for p in players if '단체' in p.get('부문', '')]
+    indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
+    
+    team_teams = [[] for _ in range((len(team_players) + p_cnt_team - 1) // p_cnt_team)] if team_players else []
+    indiv_teams = [[] for _ in range((len(indiv_players) + p_cnt_indiv - 1) // p_cnt_indiv)] if indiv_players else []
+    
+    distribute_players(team_players, team_teams, p_cnt_team)
+    distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
+    assign_orders(team_teams, p_cnt_team)
+    assign_orders(indiv_teams, p_cnt_indiv)
+    
+    # 단체전 이후에 개인전 조를 이어붙임
+    teams = team_teams + indiv_teams
 
     fields = ['청', '백', '홍', '황']
     final_roster = []
@@ -90,7 +85,7 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
             final_roster.append({
                 '경기': f"{round_id}부", '구장': field_name, '홀': hole, '팀': f"{idx+1}조", 
                 '타순': p['타순'], '대진표': f"{field_name} {hole} {p['타순']}",
-                '부문': p.get('부문', match_type), '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
+                '부문': p['부문'], '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
                 '_r': round_id, '_f': idx % 4, '_h': hole
             })
             
@@ -100,7 +95,7 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
 # ==========================================
 # [모듈 3] 인쇄용 엑셀 출력 엔진
 # ==========================================
-def create_print_excel(df, match_type, holes_cnt):
+def create_print_excel(df, holes_cnt):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         wb = writer.book
@@ -115,7 +110,7 @@ def create_print_excel(df, match_type, holes_cnt):
                 
                 ws = wb.add_worksheet(f"{r_name}_{f_name}구장")
                 ws.set_column('A:O', 11)
-                ws.write(0, 0, f"제18회 대한체육회장배 {match_type} 대진표 ({r_name} {f_name}구장)", wb.add_format({'bold': True, 'font_size': 14}))
+                ws.write(0, 0, f"제18회 대한체육회장배 대진표 ({r_name} {f_name}구장)", wb.add_format({'bold': True, 'font_size': 14}))
                 
                 row = 3
                 for h in range(1, holes_cnt + 1, 2):
@@ -168,10 +163,10 @@ def load_data_ui(label, source_type):
 # [메인 화면 실행부]
 # ==========================================
 try:
-    st.title("⛳ 그라운드골프 대진표 편성 시스템")
+    st.title("⛳ 그라운드골프 통합 대진표 시스템")
     
     st.sidebar.title("⚙️ 편성 설정")
-    m_type = st.sidebar.radio("편성 부문", ["개인전", "단체전", "통합 (단체전 ➔ 개인전 이어서)"])
+    # 💡 편성 부문 라디오 버튼 완전 삭제! 무조건 단체 -> 개인으로 작동
     h_cnt = st.sidebar.radio("출발홀 수", [6, 7, 8], index=2)
     p_cnt_team = st.sidebar.radio("단체전 조당 인원", [6, 7, 8], index=0)
     p_cnt_indiv = st.sidebar.radio("개인전 조당 인원", [6, 7, 8], index=0)
@@ -182,30 +177,24 @@ try:
     
     df_clean = None
     
-    if m_type == "통합 (단체전 ➔ 개인전 이어서)":
-        st.info("💡 통합 편성: **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요.")
-        col1, col2 = st.columns(2)
-        with col1: df_raw_team = load_data_ui("단체전", data_source)
-        with col2: df_raw_indiv = load_data_ui("개인전", data_source)
-        
-        if df_raw_team is not None and df_raw_indiv is not None:
-            clean_t, err_t = process_raw_data(df_raw_team, "단체전")
-            clean_i, err_i = process_raw_data(df_raw_indiv, "개인전")
-            if err_t: st.error(err_t)
-            elif err_i: st.error(err_i)
-            else: df_clean = pd.concat([clean_t, clean_i], ignore_index=True)
-    else:
-        df_raw = load_data_ui(m_type, data_source)
-        if df_raw is not None:
-            df_clean, err = process_raw_data(df_raw, m_type)
-            if err: st.error(err)
+    st.info("💡 **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요. (단체전 조 편성 후 이어서 개인전이 자동 편성됩니다.)")
+    col1, col2 = st.columns(2)
+    with col1: df_raw_team = load_data_ui("단체전", data_source)
+    with col2: df_raw_indiv = load_data_ui("개인전", data_source)
+    
+    if df_raw_team is not None and df_raw_indiv is not None:
+        clean_t, err_t = process_raw_data(df_raw_team, "단체전")
+        clean_i, err_i = process_raw_data(df_raw_indiv, "개인전")
+        if err_t: st.error(err_t)
+        elif err_i: st.error(err_i)
+        else: df_clean = pd.concat([clean_t, clean_i], ignore_index=True)
 
     if df_clean is not None:
         dup_mask = df_clean.duplicated(subset=['이름'], keep=False)
         if dup_mask.any():
             df_clean.loc[dup_mask, '이름'] += "(" + df_clean.loc[dup_mask, '지역'] + ")"
             
-        st.info(f"✨ 총 **{len(df_clean)}명** 데이터 스캔 완료! (동명이인 자동 분리 적용)")
+        st.success(f"✨ 총 **{len(df_clean)}명** 데이터 스캔 완료! (동명이인 자동 분리 적용)")
         
         with st.expander("👉 정리된 전체 명단 확인 (클릭)"):
             df_show = df_clean.reset_index(drop=True)
@@ -214,11 +203,12 @@ try:
         
         st.markdown("---")
         
-        if st.button(f"🚀 {m_type} 생성 실행", use_container_width=True):
-            res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team, m_type)
+        if st.button("🚀 통합 대진표 생성 실행", use_container_width=True):
+            res, t_cnt = assign_teams_and_orders(df_clean, h_cnt, p_cnt_indiv, p_cnt_team)
             
-            st.subheader(f"✅ 편성 완료 (총 {t_cnt}조)")
+            st.subheader(f"✅ 통합 편성 완료 (총 {t_cnt}조)")
             
+            # 검증용 정렬 로직 (부문 -> 지역 -> 이름)
             disp_cols = ['부문', '지역', '이름', '성별', '대진표', '경기', '팀', '구장', '홀', '타순']
             res_show = res[disp_cols].copy()
             
@@ -234,11 +224,11 @@ try:
             col1, col2 = st.columns(2)
             
             with col1:
-                st.download_button("🖨️ 인쇄용 대진표 (격자형)", data=create_print_excel(res, m_type, h_cnt), file_name=f"{m_type}_대진표.xlsx", use_container_width=True)
+                st.download_button("🖨️ 인쇄용 대진표 (격자형)", data=create_print_excel(res, h_cnt), file_name="최종_통합대진표.xlsx", use_container_width=True)
             with col2:
                 buf = io.BytesIO()
                 res_show.to_excel(buf, index=False, sheet_name="검증용_명단")
-                st.download_button("📋 검증용 명단 (엑셀형)", data=buf.getvalue(), file_name=f"{m_type}_명단검증.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.download_button("📋 검증용 명단 (엑셀형)", data=buf.getvalue(), file_name="통합명단_검증표.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 except Exception as e:
     st.error(f"🚨 시스템 오류: {e}")
