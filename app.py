@@ -34,20 +34,17 @@ def process_raw_data(df_raw, default_category):
     return df_clean[['지역', '이름', '성별', '부문']], ""
 
 # ==========================================
-# [모듈 2] 출발홀 수 비례 동적 압축 및 편성 엔진
+# [모듈 2] 출발홀 수 비례 순차 압축 편성 엔진
 # ==========================================
 def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, max_rounds=3):
     players = df.to_dict('records')
     
-    # 단체/개인 분리
     team_players = [p for p in players if '단체' in p.get('부문', '')]
     indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
     
-    # 기본 요구 조(팀) 수 계산
     t_req = (len(team_players) + p_cnt_team - 1) // p_cnt_team if team_players else 0
     i_req = (len(indiv_players) + p_cnt_indiv - 1) // p_cnt_indiv if indiv_players else 0
     
-    # 💡 8홀*3부 = 96경기, 6홀*4부 = 96경기 한계치 계산
     max_limit = holes_per_field * 4 * max_rounds
     
     if t_req + i_req > max_limit:
@@ -79,7 +76,6 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         if not target_teams: return
         region_order_count = {r: {i: 0 for i in range(1, 20)} for r in df['지역'].unique()}
         for team in target_teams:
-            # 배정된 실제 인원수만큼만 번호표를 꺼냄 (중간 뻥 뚫림 차단)
             avail_orders = list(range(1, len(team) + 1))
             team.sort(key=lambda x: x['지역'])
             for p in team:
@@ -94,21 +90,28 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
     assign_orders(team_teams)
     assign_orders(indiv_teams)
     
+    # 단체전 끝난 지점부터 개인전 조를 빈틈없이 바로 이어붙임
     teams = team_teams + indiv_teams
 
     fields = ['청', '백', '홍', '황']
     final_roster = []
     
+    # 💡 [핵심] 한 구장(예: 청)을 다 채운 뒤 다음 구장(예: 백)으로 넘어가는 순차 배정 로직
     for idx, team in enumerate(teams):
-        field_name = fields[idx % 4]
-        hole = (idx // 4) % holes_per_field + 1
-        round_id = (idx // (4 * holes_per_field)) + 1
+        round_id = (idx // (holes_per_field * 4)) + 1
+        idx_in_round = idx % (holes_per_field * 4)
+        
+        field_idx = idx_in_round // holes_per_field
+        field_name = fields[field_idx]
+        
+        hole = (idx_in_round % holes_per_field) + 1
+        
         for p in team:
             final_roster.append({
                 '경기': f"{round_id}부", '구장': field_name, '홀': hole, '팀': f"{idx+1}조", 
                 '타순': p['타순'], '대진표': f"{field_name} {hole} {p['타순']}",
                 '부문': p['부문'], '지역': p['지역'], '이름': p['이름'], '성별': p['성별'],
-                '_r': round_id, '_f': idx % 4, '_h': hole
+                '_r': round_id, '_f': field_idx, '_h': hole
             })
             
     res_df = pd.DataFrame(final_roster).sort_values(by=['_r', '_f', '_h', '타순']).reset_index(drop=True)
@@ -185,16 +188,10 @@ def load_data_ui(label, source_type):
 # [메인 화면 실행부]
 # ==========================================
 try:
-    _, logo_col, _ = st.columns([1, 1.5, 1])
-    with logo_col:
-        try: st.image("Gemini_Generated_Image_yeu46iyeu46iyeu4.png", width=350)
-        except: pass
-
     st.title("⛳ 그라운드골프 통합 대진표 시스템")
     
     st.sidebar.title("⚙️ 편성 설정")
     
-    # 💡 [핵심] 홀수와 라운드 수를 따로 고르지 않고, 하나의 세트로 직관적 선택!
     match_format = st.sidebar.radio("경기 방식 선택", ["8홀 3부 경기", "6홀 4부 경기"])
     
     if match_format == "8홀 3부 경기":
@@ -213,7 +210,7 @@ try:
     
     df_clean = None
     
-    st.info(f"💡 **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요. (단체전 편성 후 개인전이 이어지며, 선택하신 **[{match_format}]**에 따라 최대 96조로 편성 제한됩니다.)")
+    st.info(f"💡 **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요. (구장별로 순차적으로 빈틈없이 채워나가며, **[{match_format}]**에 따라 최대 96조로 편성 제한됩니다.)")
     col1, col2 = st.columns(2)
     with col1: df_raw_team = load_data_ui("단체전", data_source)
     with col2: df_raw_indiv = load_data_ui("개인전", data_source)
