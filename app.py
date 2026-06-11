@@ -8,26 +8,23 @@ import traceback
 st.set_page_config(page_title="그라운드골프 대진표 시스템", layout="wide")
 
 # ==========================================
-# [모듈 1] 데이터 스캔 및 정제 엔진 (중복 제거)
+# [모듈 1] 데이터 스캔 및 정제 엔진
 # ==========================================
 def process_raw_data(df_raw, default_category):
     if df_raw is None or df_raw.empty: return None, "데이터가 비어있습니다."
     
-    # 제목줄(헤더) 자동 탐색
     header_idx = next((i for i, r in df_raw.iterrows() if any(x in ''.join(map(str, r)) for x in ['이름', '성명', '선수명'])), -1)
     if header_idx == -1: return None, "❌ 명단에서 [이름] 또는 [성명] 항목을 찾을 수 없습니다."
     
     df_raw.columns = df_raw.iloc[header_idx].astype(str).str.replace(r"\s+", "", regex=True)
     df_raw = df_raw.iloc[header_idx+1:].loc[:, ~df_raw.columns.duplicated()].reset_index(drop=True)
     
-    # 열 이름 표준화
     rename_map = {'성명':'이름', '선수명':'이름', '소속':'지역', '시군구':'지역', '클럽':'지역', '남여':'성별'}
     df_raw.rename(columns=rename_map, inplace=True)
     
     if '이름' not in df_raw.columns or '지역' not in df_raw.columns:
         return None, "❌ 명단에 [이름]과 [지역] 열이 모두 필요합니다."
     
-    # 빈칸 정리 및 유령 인원(결측치) 제거
     for col in ['지역', '이름']:
         df_raw[col] = df_raw[col].astype(str).str.strip().replace(r'^\s*$', np.nan, regex=True).replace(['nan', 'None', 'NaN'], np.nan)
     df_clean = df_raw.dropna(subset=['지역', '이름']).copy()
@@ -38,23 +35,20 @@ def process_raw_data(df_raw, default_category):
     return df_clean[['지역', '이름', '성별', '부문']], ""
 
 # ==========================================
-# [모듈 2] 대진표 초고속 편성 엔진
+# [모듈 2] 대진표 편성 엔진
 # ==========================================
 def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, match_type="개인전"):
     players = df.to_dict('records')
     
-    # 선수 분배 알고리즘
     def distribute_players(target_players, target_teams, p_cnt):
         if not target_players: return
         r_counts = pd.Series([p['지역'] for p in target_players]).value_counts().to_dict()
         target_players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
-        
         for p in target_players:
             allowed = [t for t in target_teams if len(t) < p_cnt] or target_teams
             best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['이름'] == p['이름']), sum(1 for x in t if x['지역'] == p['지역']), sum(1 for x in t if x['성별'] == p['성별']), len(t)))
             best_team.append(p)
 
-    # 타순 스마트 할당
     def assign_orders(target_teams, p_cnt):
         region_order_count = {r: {i: 0 for i in range(1, p_cnt + 1)} for r in df['지역'].unique()}
         for team in target_teams:
@@ -66,7 +60,6 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
                 avail_orders.remove(best_order)
                 region_order_count[p['지역']][best_order] += 1
 
-    # 단체/개인 분리 배정 처리
     if match_type == "통합 (단체전 ➔ 개인전 이어서)":
         team_players = [p for p in players if '단체' in p.get('부문', '')]
         indiv_players = [p for p in players if '단체' not in p.get('부문', '')]
@@ -76,7 +69,6 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         
         distribute_players(team_players, team_teams, p_cnt_team)
         distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
-        
         assign_orders(team_teams, p_cnt_team)
         assign_orders(indiv_teams, p_cnt_indiv)
         
@@ -87,7 +79,6 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         distribute_players(players, teams, current_p_cnt)
         assign_orders(teams, current_p_cnt)
 
-    # 최종 결과표 조립
     fields = ['청', '백', '홍', '황']
     final_roster = []
     
@@ -147,22 +138,19 @@ def create_print_excel(df, match_type, holes_cnt):
     return output.getvalue()
 
 # ==========================================
-# [모듈 4] UI 파일 입력 도우미 (코드 중복 제거)
+# [모듈 4] UI 파일 입력 도우미
 # ==========================================
 def load_data_ui(label, source_type):
     df_raw = None
-    if source_type == "엑셀/CSV 파일 업로드":
-        up_file = st.file_uploader(f"📂 [{label}] 명단 파일 업로드", type=["xlsx", "csv"], key=f"file_{label}")
+    if source_type == "엑셀 파일 업로드":
+        up_file = st.file_uploader(f"📂 [{label}] 명단 엑셀 업로드", type=["xlsx"], key=f"file_{label}")
         if up_file:
             try:
-                if up_file.name.endswith('.csv'):
-                    df_raw = pd.read_csv(up_file, header=None)
-                else:
-                    xls = pd.ExcelFile(up_file)
-                    sheet = st.selectbox(f"📋 [{label}] 시트 선택", xls.sheet_names, key=f"sheet_{label}")
-                    df_raw = pd.read_excel(up_file, sheet_name=sheet, header=None)
+                xls = pd.ExcelFile(up_file)
+                sheet = st.selectbox(f"📋 [{label}] 시트 선택", xls.sheet_names, key=f"sheet_{label}")
+                df_raw = pd.read_excel(up_file, sheet_name=sheet, header=None)
             except Exception as e:
-                st.error(f"파일 읽기 오류: {e}")
+                st.error(f"엑셀 파일 읽기 오류: {e}")
                 
     elif source_type == "구글 시트 링크 연결":
         url = st.text_input(f"🔗 [{label}] 구글 시트 링크", key=f"url_{label}")
@@ -180,7 +168,7 @@ def load_data_ui(label, source_type):
 # [메인 화면 실행부]
 # ==========================================
 try:
-    # 💡 로고 이미지 적용 (가장 최신 파일명)
+    # 로고 적용
     _, logo_col, _ = st.columns([1, 1.5, 1])
     with logo_col:
         try: st.image("Gemini_Generated_Image_yeu46iyeu46iyeu4.png", width=350)
@@ -196,17 +184,10 @@ try:
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📥 데이터 입력 방식")
-    data_source = st.sidebar.radio("명단 가져오기 방식", ["엑셀/CSV 파일 업로드", "구글 시트 링크 연결"])
+    # 💡 CSV 옵션을 완전히 제거하고 "엑셀 파일 업로드"로 되돌림
+    data_source = st.sidebar.radio("명단 가져오기 방식", ["엑셀 파일 업로드", "구글 시트 링크 연결"])
     
     df_clean = None
     
-    # 💡 데이터 로드 처리부 (중복 코드 완벽 제거)
     if m_type == "통합 (단체전 ➔ 개인전 이어서)":
         st.info("💡 통합 편성: **단체전 명단**과 **개인전 명단**을 각각 입력해 주세요.")
-        col1, col2 = st.columns(2)
-        with col1: df_raw_team = load_data_ui("단체전", data_source)
-        with col2: df_raw_indiv = load_data_ui("개인전", data_source)
-        
-        if df_raw_team is not None and df_raw_indiv is not None:
-            clean_t, err_t = process_raw_data(df_raw_team, "단체전")
-            clean_i, err_i = process_raw_data(df_raw_indiv,
