@@ -20,6 +20,9 @@ try:
         
         players = working_df.to_dict('records')
         
+        # 💡 [버그 수정] 구장 이름표 목록 복구!
+        fields = ['청', '백', '홍', '황']
+        
         if match_type == "통합 (단체전 ➔ 개인전 이어서)":
             team_players = [p for p in players if '단체' in str(p.get('부문', ''))]
             indiv_players = [p for p in players if '단체' not in str(p.get('부문', ''))]
@@ -297,7 +300,6 @@ try:
                     st.info(f"✨ 총 **{len(df_clean)}명** 스캔 완료! (동명이인 자동 분리 완료)")
                     
                     with st.expander("👉 전체 명단 꼼꼼히 확인하기 (클릭)"):
-                        # 💡 [핵심] 0번이 아닌 1번부터 순번(Index) 시작!
                         df_show = df_clean.reset_index(drop=True)
                         df_show.index = df_show.index + 1
                         st.dataframe(df_show, use_container_width=True)
@@ -313,7 +315,6 @@ try:
                         
                         display_cols = ['대진표', '경기', '팀', '구장', '홀', '타순', '부문', '지역', '이름']
                         
-                        # 💡 [핵심] 결과 창의 순번(Index)도 1번부터 시작!
                         res_show = res[display_cols].copy()
                         res_show.index = res_show.index + 1
                         st.dataframe(res_show, use_container_width=True)
