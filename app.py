@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import io
-import random
 import traceback
 
 st.set_page_config(page_title="그라운드골프 대진표 시스템", layout="wide")
@@ -44,7 +43,6 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         if not target_players: return
         r_counts = pd.Series([p['지역'] for p in target_players]).value_counts().to_dict()
         target_players.sort(key=lambda x: (r_counts.get(x['지역'], 0), x['지역']), reverse=True)
-        
         for p in target_players:
             allowed = [t for t in target_teams if len(t) < p_cnt] or target_teams
             best_team = min(allowed, key=lambda t: (sum(1 for x in t if x['이름'] == p['이름']), sum(1 for x in t if x['지역'] == p['지역']), sum(1 for x in t if x['성별'] == p['성별']), len(t)))
@@ -53,7 +51,8 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
     def assign_orders(target_teams, p_cnt):
         region_order_count = {r: {i: 0 for i in range(1, p_cnt + 1)} for r in df['지역'].unique()}
         for team in target_teams:
-            avail_orders = list(range(1, p_cnt + 1))
+            # 💡 [핵심 해결] 실제 팀에 배정된 인원수(len(team))만큼만 타순(1~N)을 생성하여 중간 번호 뻥 뚫림 방지!
+            avail_orders = list(range(1, len(team) + 1))
             team.sort(key=lambda x: x['지역'])
             for p in team:
                 best_order = min(avail_orders, key=lambda o: region_order_count[p['지역']].get(o, 0))
@@ -70,7 +69,6 @@ def assign_teams_and_orders(df, holes_per_field=8, p_cnt_indiv=6, p_cnt_team=6, 
         
         distribute_players(team_players, team_teams, p_cnt_team)
         distribute_players(indiv_players, indiv_teams, p_cnt_indiv)
-        
         assign_orders(team_teams, p_cnt_team)
         assign_orders(indiv_teams, p_cnt_indiv)
         
@@ -170,7 +168,6 @@ def load_data_ui(label, source_type):
 # [메인 화면 실행부]
 # ==========================================
 try:
-    # 💡 로고 이미지 적용 부분을 완전히 삭제했습니다.
     st.title("⛳ 그라운드골프 대진표 편성 시스템")
     
     st.sidebar.title("⚙️ 편성 설정")
@@ -181,7 +178,6 @@ try:
     
     st.sidebar.markdown("---")
     st.sidebar.subheader("📥 데이터 입력 방식")
-    # CSV 옵션을 제외한 "엑셀 파일 업로드"로 유지
     data_source = st.sidebar.radio("명단 가져오기 방식", ["엑셀 파일 업로드", "구글 시트 링크 연결"])
     
     df_clean = None
@@ -205,7 +201,6 @@ try:
             if err: st.error(err)
 
     if df_clean is not None:
-        # 동명이인 처리
         dup_mask = df_clean.duplicated(subset=['이름'], keep=False)
         if dup_mask.any():
             df_clean.loc[dup_mask, '이름'] += "(" + df_clean.loc[dup_mask, '지역'] + ")"
@@ -224,7 +219,6 @@ try:
             
             st.subheader(f"✅ 편성 완료 (총 {t_cnt}조)")
             
-            # 💡 검증을 위해 "부문 -> 지역 -> 이름 -> 대진표" 순으로 데이터 정렬 유지!
             disp_cols = ['부문', '지역', '이름', '성별', '대진표', '경기', '팀', '구장', '홀', '타순']
             res_show = res[disp_cols].copy()
             
